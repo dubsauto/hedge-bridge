@@ -15,7 +15,7 @@ security = HTTPBearer()
 
 def hash_password(password: str) -> str:
     """Hash password using bcrypt (modern & reliable)"""
-    salt = bcrypt.gensalt(rounds=12)
+    salt = bcrypt.gensalt(12)
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
