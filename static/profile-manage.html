@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile Management</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/assets/ui.css">
+
+  <style>
+    .approval-card {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px;
+      background: rgba(0,0,0,.16);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .profile-table th {
+      background: #171717 !important;
+      color: #f5f5f5 !important;
+    }
+  </style>
+</head>
+<body class="ui-body ui-profile-page">
+
+<div class="container py-4" style="max-width: 1200px;">
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+      <div class="ui-h1">Profile Management</div>
+      <div class="ui-sub">Approve signup requests and manage user roles & permissions</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="/app" class="ui-btn px-3">← Back to Dashboard</a>
+      <button id="logoutBtn" class="ui-btn px-3">Logout</button>
+    </div>
+  </div>
+
+  <!-- Approval Queue -->
+  <div class="ui-panel mb-4">
+    <div class="ui-panel-title">Approval Queue</div>
+    <div class="ui-footnote mb-3" id="pendingCount">Pending requests: 0</div>
+    
+    <div id="approvalQueue" class="row g-3">
+      <!-- Populated by JavaScript -->
+    </div>
+  </div>
+
+  <!-- All Users Table -->
+  <div class="ui-panel">
+    <div class="ui-panel-title">All Users</div>
+    
+    <div class="table-responsive">
+      <table class="table ui-table align-middle mb-0 profile-table">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Role</th>
+            <th>Can Trade</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="usersTableBody">
+          <!-- Populated by JavaScript -->
+        </tbody>
+      </table>
+    </div>
+
+    <div class="ui-footnote mt-3">
+      Pending users cannot log in until approved by an admin.
+    </div>
+  </div>
+</div>
+
+<script>
+// Get token
+const token = localStorage.getItem("token");
+if (!token) {
+  window.location.href = "/";
+}
+
+// Logout
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  window.location.href = "/";
+});
+
+// Load all users + pending approvals
+async function loadProfiles() {
+  try {
+    const res = await fetch("/admin/profiles", {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    if (res.status === 403) {
+      alert("Access denied. Admin only.");
+      window.location.href = "/app";
+      return;
+    }
+
+    const data = await res.json();
+
+    // Update pending count
+    document.getElementById("pendingCount").textContent = 
+      `Pending requests: ${data.pending_count || 0}`;
+
+    // Render Approval Queue
+    renderApprovalQueue(data.pending_users || []);
+
+    // Render All Users Table
+    renderUsersTable(data.all_users || []);
+
+  } catch (err) {
+    console.error(err);
+    alert("Failed to load profiles");
+  }
+}
+
+// Render Pending Approvals
+function renderApprovalQueue(pending) {
+  const container = document.getElementById("approvalQueue");
+  container.innerHTML = "";
+
+  if (pending.length === 0) {
+    container.innerHTML = `<div class="col-12"><div class="ui-footnote">No pending signup requests.</div></div>`;
+    return;
+  }
+
+  pending.forEach(user => {
+    const card = document.createElement("div");
+    card.className = "col-lg-6";
+    card.innerHTML = `
+      <div class="approval-card">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <strong>${user.username}</strong><br>
+            <small class="text-muted">${user.email || '-'}</small>
+          </div>
+          <span class="badge bg-warning">Pending</span>
+        </div>
+        <form class="mt-3 approval-form" data-user-id="${user.id}">
+          <input type="text" class="form-control form-control-sm mb-2" name="approval_note" placeholder="Optional note...">
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-success btn-sm approve-btn" data-decision="approve">Approve</button>
+            <button type="button" class="btn btn-danger btn-sm decline-btn" data-decision="decline">Decline</button>
+          </div>
+        </form>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+
+  // Attach event listeners
+  document.querySelectorAll(".approval-form").forEach(form => {
+    form.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const userId = form.dataset.userId;
+        const decision = btn.dataset.decision;
+        const note = form.querySelector("input[name='approval_note']").value.trim();
+
+        await updateApproval(userId, decision, note);
+      });
+    });
+  });
+}
+
+// Render All Users
+function renderUsersTable(users) {
+  const tbody = document.getElementById("usersTableBody");
+  tbody.innerHTML = "";
+
+  users.forEach(user => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td><strong>${user.username}</strong></td>
+      <td>${user.email || '-'}</td>
+      <td>
+        <span class="badge ${user.approval_status === 'pending' ? 'bg-warning' : 
+                            user.approval_status === 'declined' ? 'bg-danger' : 'bg-success'}">
+          ${user.approval_status ? user.approval_status.charAt(0).toUpperCase() + user.approval_status.slice(1) : 'Approved'}
+        </span>
+      </td>
+      <td>
+        <select class="ui-select role-select" data-user-id="${user.id}" style="height:36px; width:100px;">
+          <option value="user" ${user.role === 'user' ? 'selected' : ''}>User</option>
+          <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+      </td>
+      <td>
+        <label class="form-check form-switch">
+          <input type="checkbox" class="form-check-input can-trade-toggle" data-user-id="${user.id}" 
+                 ${user.can_trade ? 'checked' : ''}>
+          <span class="form-check-label">Allow</span>
+        </label>
+      </td>
+      <td class="text-end">
+        <button class="ui-btn px-3 save-btn" data-user-id="${user.id}">Save</button>
+        ${user.username !== 'adabs' && user.username !== 'alessandro' ? 
+          `<button class="btn btn-danger btn-sm delete-btn ms-2" data-user-id="${user.id}">Delete</button>` : ''}
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  // Attach save and delete listeners (you can expand this later)
+  document.querySelectorAll(".save-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const userId = btn.dataset.userId;
+      const roleSelect = document.querySelector(`.role-select[data-user-id="${userId}"]`);
+      const canTradeCheck = document.querySelector(`.can-trade-toggle[data-user-id="${userId}"]`);
+      
+      alert(`Save changes for user ID ${userId} → Role: ${roleSelect.value}, Can Trade: ${canTradeCheck.checked}`);
+      // We'll implement the actual API call in the next step
+    });
+  });
+}
+
+function startHeartbeat(pageName) {
+  setInterval(() => {
+    fetch("admin/activity/heartbeat", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        page: pageName,
+        action: "heartbeat"
+      })
+    });
+  }, 15000);
+}
+
+// Approve / Decline function
+async function updateApproval(userId, decision, note) {
+  try {
+    const res = await fetch("/admin/approve", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify({
+        user_id: parseInt(userId),
+        decision: decision,
+        approval_note: note
+      })
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      alert(data.message || "Action completed");
+      loadProfiles(); // Refresh the page
+    } else {
+      alert(data.detail || "Failed to update");
+    }
+  } catch (err) {
+    alert("Connection error");
+  }
+}
+
+// Initial load
+loadProfiles();
+startHeartbeat("dashboard");
+</script>
+
+</body>
+</html>

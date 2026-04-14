@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MT5 Accounts - Connect</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/assets/ui.css">
+
+  <style>
+    .form-label { font-weight: 500; color: #cbd5e1; }
+    .ui-input { background: #334155; border: 1px solid #475569; color: #e2e8f0; }
+    .ui-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
+    .ui-input:disabled { opacity: 0.7; background: #2a3a4f; }
+  </style>
+</head>
+<body class="ui-body ui-profile-page">
+
+<div class="container py-4" style="max-width: 1200px;">
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+      <div class="ui-h1">MT5 Accounts</div>
+      <div class="ui-sub">Connect your MetaTrader 5 accounts for copy trading</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="/app" class="ui-btn px-3">← Back to Dashboard</a>
+      <button id="logoutBtn" class="ui-btn px-3">Logout</button>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- Add / Edit Form -->
+    <div class="col-lg-5">
+      <div class="ui-panel">
+        <div class="ui-panel-title" id="formTitle">Add New MT5 Account</div>
+        
+        <form id="mt5Form">
+          <input type="hidden" id="accountId" value="">
+
+          <div class="mb-3">
+            <label class="form-label">Account Name</label>
+            <input type="text" id="name" class="ui-input form-control" placeholder="My Main Account" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Login (Account Number)</label>
+            <input type="number" id="login" class="ui-input form-control" placeholder="12345678" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Password</label>
+            <div class="ui-password-wrap">
+              <input type="password" id="password" class="ui-input form-control" placeholder="MT5 Password" required>
+              <button type="button" class="ui-password-toggle-btn" id="togglePassword">👁</button>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Server</label>
+            <input type="text" id="server" class="ui-input form-control" placeholder="e.g. ICMarketsSC-Demo" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Magic Number</label>
+            <input type="number" id="magic" class="ui-input form-control" value="0" placeholder="Magic Number">
+            <div id="magicError" style="color: #f87171; font-size: 13px; display: none;">
+              Magic must be 0 when manual trading is enabled
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-check form-switch">
+                <input type="checkbox" id="enableManual" class="form-check-input" checked>
+                <span class="form-check-label">Show API Trades as Manual Trading</span>
+              </label>
+            </div>
+            <div class="col-12">
+              <label class="form-check form-switch">
+                <input type="checkbox" id="useDedicatedIP" class="form-check-input" checked>
+                <span class="form-check-label">Use Dedicated IP</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="ui-btn w-50" id="saveBtn">Save Account</button>
+            <button type="button" class="ui-btn w-50" id="clearBtn">Clear Form</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Accounts List -->
+    <div class="col-lg-7">
+      <div class="ui-panel">
+        <div class="ui-panel-title">Your MT5 Accounts</div>
+        
+        <div class="table-responsive">
+          <table class="table ui-table align-middle mb-0">
+            <thead>
+              <tr class="profile-table-head">
+                <th>Name</th>
+                <th>Login</th>
+                <th>Server</th>
+                <th>Magic</th>
+                <th>Status</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accountsTableBody">
+              <!-- Populated by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = localStorage.getItem("token");
+if (!token) window.location.href = "/";
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  window.location.href = "/";
+});
+
+// Password toggle
+document.getElementById("togglePassword").addEventListener("click", function() {
+  const pwd = document.getElementById("password");
+  if (pwd.type === "password") {
+    pwd.type = "text";
+    this.textContent = "🙈";
+  } else {
+    pwd.type = "password";
+    this.textContent = "👁";
+  }
+});
+
+// Auto-set Magic Number to 0 when "Show API Trades as Manual" is checked
+const enableManualCheckbox = document.getElementById("enableManual");
+const magicInput = document.getElementById("magic");
+
+enableManualCheckbox.addEventListener("change", function() {
+  if (this.checked) {
+    magicInput.value = "0";
+    magicInput.disabled = true;
+    magicInput.style.opacity = "0.7";
+  } else {
+    magicInput.disabled = false;
+    magicInput.style.opacity = "1";
+  }
+});
+
+// Load user's MT5 accounts
+async function loadAccounts() {
+  try {
+    const res = await fetch("/mt5/accounts", {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem("token");
+      window.location.href = "/";
+      return;
+    }
+
+    const data = await res.json();
+    renderAccounts(data.accounts || []);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderAccounts(accounts) {
+  const tbody = document.getElementById("accountsTableBody");
+  tbody.innerHTML = "";
+
+  if (accounts.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4">No MT5 accounts added yet.</td></tr>`;
+    return;
+  }
+
+  accounts.forEach(acc => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td><strong>${acc.name}</strong></td>
+      <td>${acc.login}</td>
+      <td>${acc.server}</td>
+      <td>${acc.magic !== null ? acc.magic : 0}</td>
+      <td>
+        <span class="ui-dot ${acc.online ? 'online' : 'offline'}"></span>
+        <span class="ms-2">${acc.online ? 'Online' : 'Offline'}</span>
+      </td>
+      <td class="text-end">
+        <button class="ui-btn px-3 edit-btn" data-id="${acc.id}">Edit</button>
+        <button class="btn btn-danger btn-sm delete-btn ms-2" data-id="${acc.id}">Delete</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  // Edit buttons
+  document.querySelectorAll(".edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id);
+      const account = accounts.find(a => a.id === id);
+      if (account) fillFormForEdit(account);
+    });
+  });
+  // Delete buttons
+document.querySelectorAll(".delete-btn").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const id = btn.dataset.id;
+
+    if (!confirm("Are you sure you want to delete this account?")) return;
+
+    try {
+      const res = await fetch(`/mt5/accounts/${id}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": "Bearer " + token
+        }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        alert(data.message || "Account deleted");
+        loadAccounts();
+      } else {
+        alert(data.detail || "Failed to delete");
+      }
+    } catch (err) {
+      alert("Connection error");
+    }
+  });
+});
+}
+
+function fillFormForEdit(account) {
+  document.getElementById("accountId").value = account.id || "";
+  document.getElementById("name").value = account.name || "";
+  document.getElementById("login").value = account.login || "";
+  document.getElementById("password").value = ""; 
+  document.getElementById("server").value = account.server || "";
+  document.getElementById("magic").value = account.magic !== null ? account.magic : 0;
+  
+  const isManual = account.manual_trades !== false;
+  document.getElementById("enableManual").checked = isManual;
+  document.getElementById("useDedicatedIP").checked = account.use_dedicated_ip !== false;
+
+  // Trigger the magic number logic
+  if (isManual) {
+    document.getElementById("magic").disabled = true;
+    document.getElementById("magic").style.opacity = "0.7";
+  } else {
+    document.getElementById("magic").disabled = false;
+    document.getElementById("magic").style.opacity = "1";
+  }
+
+  document.getElementById("formTitle").textContent = "Edit MT5 Account";
+  document.getElementById("saveBtn").textContent = "Update Account";
+}
+
+// Form submission
+document.getElementById("mt5Form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const isManual = document.getElementById("enableManual").checked;
+  const magicValue = parseInt(document.getElementById("magic").value) || 0;
+
+  // 🚨 VALIDATION
+  if (isManual && magicValue !== 0) {
+    alert("When manual trading is enabled, Magic Number must be 0.");
+    return; // ❌ STOP submission
+  }
+
+  const payload = {
+    name: document.getElementById("name").value.trim(),
+    login: parseInt(document.getElementById("login").value),
+    server: document.getElementById("server").value.trim(),
+    manual_trades: isManual,
+    use_dedicated_ip: document.getElementById("useDedicatedIP").checked,
+    magic: isManual ? 0 : magicValue
+  };
+
+  // Only send password if filled
+  const password = document.getElementById("password").value;
+  if (password) {
+    payload.password = password;
+  }
+
+  const id = document.getElementById("accountId").value;
+  const url = id ? `/mt5/accounts/${id}` : "/mt5/accounts";
+  const method = id ? "PUT" : "POST";
+
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      alert(data.message || "Account saved successfully");
+      document.getElementById("mt5Form").reset();
+      document.getElementById("accountId").value = "";
+      document.getElementById("formTitle").textContent = "Add New MT5 Account";
+      document.getElementById("saveBtn").textContent = "Save Account";
+      loadAccounts();
+    } else {
+      alert(data.detail || "Failed to save");
+    }
+  } catch (err) {
+    alert("Connection error");
+  }
+});
+
+// Clear form
+document.getElementById("clearBtn").addEventListener("click", () => {
+  document.getElementById("mt5Form").reset();
+  document.getElementById("accountId").value = "";
+  document.getElementById("formTitle").textContent = "Add New MT5 Account";
+  document.getElementById("saveBtn").textContent = "Save Account";
+  // Reset magic field to enabled
+  document.getElementById("magic").disabled = false;
+  document.getElementById("magic").style.opacity = "1";
+});
+
+function startHeartbeat(pageName) {
+  setInterval(() => {
+    fetch("admin/activity/heartbeat", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        page: pageName,
+        action: "heartbeat"
+      })
+    });
+  }, 15000);
+}
+
+function validateMagic() {
+  const isManual = document.getElementById("enableManual").checked;
+  const magicValue = parseInt(document.getElementById("magic").value) || 0;
+  const errorEl = document.getElementById("magicError");
+
+  if (isManual && magicValue !== 0) {
+    errorEl.style.display = "block";
+  } else {
+    errorEl.style.display = "none";
+  }
+}
+
+// Trigger on change
+document.getElementById("enableManual").addEventListener("change", validateMagic);
+document.getElementById("magic").addEventListener("input", validateMagic);
+
+// Initial load
+loadAccounts();
+startHeartbeat("dashboard");
+</script>
+
+</body>
+</html>

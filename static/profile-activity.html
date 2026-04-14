@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profile Activity</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/assets/ui.css">
+
+  <style>
+    .ui-activity-card, .ui-activity-item {
+      background: rgba(15,22,32,.55);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+  </style>
+</head>
+<body class="ui-body ui-dashboard-page ui-activity-page">
+
+<div class="ui-shell">
+
+  <!-- Sidebar -->
+  <aside class="ui-sidebar">
+    <nav class="ui-nav">
+      <a class="ui-nav-item" href="/app"><span class="ui-ico ui-ico-badge">D</span> Dashboard - hub</a>
+      <a class="ui-nav-item" href="/mt5-connect"><span class="ui-ico ui-ico-badge">M</span> MT5 - login & Connect</a>
+      
+      <a class="ui-nav-item ui-nav-item-book" href="/profile-manage">
+        <span class="ui-ico ui-ico-badge">P</span>
+        <span class="ui-nav-text">Profile Manage - 🔰</span>
+      </a>
+      
+      <a class="ui-nav-item ui-nav-item-book active" href="/profile-activity">
+        <span class="ui-ico ui-ico-badge">A</span>
+        <span class="ui-nav-text">Profile Activity - 🔰</span>
+      </a>
+
+      <a class="ui-nav-item" href="#" id="logoutBtn">
+        <span class="ui-ico ui-ico-badge">L</span> Logout - to account
+      </a>
+    </nav>
+  </aside>
+
+  <main class="ui-main">
+    <header class="ui-topbar">
+      <div>
+        <div class="ui-h1">Activity Monitor</div>
+        <div class="ui-sub">Live user presence and recent actions</div>
+      </div>
+      <div class="ui-top-right ms-auto">
+        <div class="ui-pill ui-pill-equal">
+          <span class="ui-dot online ui-activity-dot"></span>
+          <span id="activeCount">0 Active Now</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="ui-activity-content">
+
+      <!-- Active Now -->
+      <section class="ui-panel">
+        <div class="ui-panel-title">Active Now</div>
+        <div id="activeNowContainer">
+          <div class="ui-footnote">Loading active users...</div>
+        </div>
+
+        <div class="ui-panel-title mt-4">Recently Offline</div>
+        <div id="offlineContainer">
+          <div class="ui-footnote">No offline users recorded yet.</div>
+        </div>
+      </section>
+
+      <!-- Recent History -->
+      <section class="ui-panel">
+        <div class="ui-panel-title">Recent History</div>
+        
+        <div class="d-flex gap-3 mb-3">
+          <select id="hoursFilter" class="ui-select" style="width: 140px;">
+            <option value="6">Last 6 hours</option>
+            <option value="12">Last 12 hours</option>
+            <option value="24" selected>Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+          </select>
+          <button id="refreshBtn" class="ui-btn">Refresh</button>
+        </div>
+
+        <div id="historyContainer" class="ui-activity-list">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script>
+const token = localStorage.getItem("token");
+if (!token) window.location.href = "/";
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  window.location.href = "/";
+});
+
+async function loadActivity(hours = 24) {
+  try {
+    const res = await fetch(`/admin/activity?hours=${hours}`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (res.status === 403) {
+      alert("Admin access only");
+      window.location.href = "/app";
+      return;
+    }
+
+    const data = await res.json();
+
+    // Active Now
+    renderActiveNow(data.active_now || []);
+    
+    // Offline
+    renderOffline(data.offline || []);
+    
+    // History
+    renderHistory(data.history || []);
+
+    document.getElementById("activeCount").textContent = `${data.active_count || 0} Active Now`;
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderActiveNow(users) {
+  const container = document.getElementById("activeNowContainer");
+  if (users.length === 0) {
+    container.innerHTML = `<div class="ui-footnote">No users are currently active.</div>`;
+    return;
+  }
+
+  let html = `<div class="ui-activity-cards">`;
+  users.forEach(u => {
+    html += `
+      <div class="ui-activity-card">
+        <div class="ui-activity-user">
+          <span class="ui-activity-dot"></span>
+          <span>${u.username}</span>
+          <span class="ui-activity-badge ${u.role === 'admin' ? 'badge-auth' : 'badge-view'}">${u.role}</span>
+        </div>
+        <div class="ui-activity-meta">Page: <strong>${u.page || 'dashboard'}</strong></div>
+        <div class="ui-activity-meta">Last action: <strong>${u.action || 'heartbeat'}</strong></div>
+        <div class="ui-activity-meta">Last seen: Active</div>
+      </div>`;
+  });
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+function renderOffline(users) {
+  const container = document.getElementById("offlineContainer");
+  if (users.length === 0) {
+    container.innerHTML = `<div class="ui-footnote">No recently offline users.</div>`;
+    return;
+  }
+
+  let html = `<div class="ui-activity-list">`;
+  users.forEach(u => {
+    html += `
+      <div class="ui-activity-item">
+        <span class="ui-activity-badge ${u.role === 'admin' ? 'badge-auth' : 'badge-view'}">${u.username}</span>
+        <div class="ui-activity-item-meta">
+          <div>Last seen: ${u.last_seen_ago || 'Unknown'}</div>
+          <div class="ui-footnote">Last page: ${u.page || '-'}</div>
+        </div>
+      </div>`;
+  });
+  html += `</div>`;
+  container.innerHTML = html;
+}
+function startHeartbeat(pageName) {
+  setInterval(() => {
+    fetch("admin/activity/heartbeat", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        page: pageName,
+        action: "heartbeat"
+      })
+    });
+  }, 15000);
+}
+
+function renderHistory(logs) {
+  const container = document.getElementById("historyContainer");
+  if (logs.length === 0) {
+    container.innerHTML = `<div class="ui-footnote">No activity recorded yet.</div>`;
+    return;
+  }
+
+  let html = "";
+  logs.forEach(log => {
+    html += `
+      <div class="ui-activity-item">
+        <span class="ui-activity-badge badge-view">${log.action || 'Activity'}</span>
+        <div class="ui-activity-item-meta">
+          <div><strong>${log.username}</strong> on ${log.page || 'dashboard'}</div>
+          <div class="ui-footnote">${log.time_ago || ''}</div>
+        </div>
+      </div>`;
+  });
+  container.innerHTML = html;
+}
+
+// Event listeners
+document.getElementById("refreshBtn").addEventListener("click", () => {
+  const hours = parseInt(document.getElementById("hoursFilter").value);
+  loadActivity(hours);
+});
+
+document.getElementById("hoursFilter").addEventListener("change", () => {
+  const hours = parseInt(document.getElementById("hoursFilter").value);
+  loadActivity(hours);
+});
+
+// Initial load
+loadActivity(24);
+startHeartbeat("dashboard");
+</script>
+
+</body>
+</html>

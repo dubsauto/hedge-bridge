@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hedge Bridge - Dashboard</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/assets/ui.css">
+
+  <style>
+    .ui-shell { display: flex; min-height: 100vh; }
+    .ui-role-picker { position: relative; }
+    .ui-role-menu { 
+      display: none; 
+      position: absolute; 
+      background: white; 
+      border: 1px solid #ddd; 
+      z-index: 100; 
+      min-width: 180px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      padding: 6px 0;
+    }
+    .ui-role-picker.open .ui-role-menu { display: block; }
+    .disabled { opacity: 0.6; pointer-events: none; cursor: not-allowed; }
+    .log-info { color: #00c853; font-weight: 500; }
+    .log-error { color: #ff1744; font-weight: 600; }
+    .log-warning { color: #ff9100; font-weight: 500; }
+    .log-trade { color: #00b0ff; font-weight: 600; }
+    .log-default { color: #cfd8dc; }
+  </style>
+</head>
+<body class="ui-body ui-dashboard-page" data-activity-page="dashboard">
+
+<div class="ui-shell">
+
+  <!-- Sidebar -->
+  <aside class="ui-sidebar">
+    <nav class="ui-nav">
+      <a class="ui-nav-item active" href="/app">
+        <span class="ui-ico ui-ico-badge">D</span> Dashboard - hub
+      </a>
+      <a class="ui-nav-item" href="/mt5-connect">
+        <span class="ui-ico ui-ico-badge">M</span> MT5 - login & Connect
+      </a>
+
+      <a class="ui-nav-item ui-nav-item-book" href="/profile-manage" id="profileManageLink">
+        <span class="ui-ico ui-ico-badge">P</span>
+        <span class="ui-nav-text">Profile Manage - 🔰</span>
+        <span id="pendingApprovalsBadge" class="ui-nav-badge">0</span>
+      </a>
+
+      <a class="ui-nav-item ui-nav-item-book" href="/profile-activity" id="profileActivityLink">
+        <span class="ui-ico ui-ico-badge">A</span>
+        <span class="ui-nav-text">Profile Activity - 🔰</span>
+      </a>
+
+      <a class="ui-nav-item" href="#" id="logoutBtn">
+        <span class="ui-ico ui-ico-badge">L</span> Logout
+      </a>
+    </nav>
+
+    <div class="ui-copy-panel">
+      <div class="ui-copy-panel-head">
+        <div class="ui-copy-panel-title">Trading Account Assignment</div>
+        <div class="ui-copy-panel-sub" id="copySummary">Masters: 0 | Slaves: 0 | Unassigned: 0</div>
+      </div>
+      <div id="copyTree" class="ui-copy-tree">
+        <div class="ui-copy-empty">Coming soon...</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="ui-main">
+    <header class="ui-topbar">
+      <div class="ui-pill-row ui-top-pills">
+        <span class="ui-pill ui-pill-equal" id="rolePill">Role: User</span>
+        <span class="ui-pill ui-pill-equal" id="tradingPill">Trading: Disabled</span>
+        <span class="ui-pill ui-pill-equal" id="mt5Count">MT5 Accounts: 0</span>
+      </div>
+
+      <div class="ui-top-right ms-auto">
+        <div class="ui-pill ui-pill-equal">
+          <span id="sysDot" class="ui-dot online"></span>
+          <span id="sysText">System Online</span>
+        </div>
+        <div class="ui-user">
+          <div class="ui-avatar" id="userAvatar">U</div>
+          <div class="ui-user-meta">
+            <div class="ui-user-name" id="usernameDisplay">Loading...</div>
+            <div class="ui-user-role" id="userRoleDisplay">User</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="ui-content">
+      <section class="ui-center">
+
+        <!-- Account Selector + Live Status -->
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div>
+            <div class="ui-h1">Live Overview</div>
+            <div class="ui-sub" id="welcomeSub">Welcome back</div>
+          </div>
+
+          <div>
+            <select id="accountSelector" class="ui-select">
+              <option value="">Select MT5 Account</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="ui-conn mb-4">
+          <span id="connDot" class="ui-dot offline"></span>
+          <span id="connText">Connection: <strong id="connStatus">Unknown</strong></span>
+          <span id="acctText">Account: <strong id="acctLogin">-</strong></span>
+          <span id="serverText">Server: <strong id="acctServer">-</strong></span>
+          <button id="btnRefresh" class="ui-linkbtn" type="button">Refresh</button>
+        </div>
+
+        <!-- Account Cards -->
+        <div class="ui-cardgrid mb-4" id="accountCards"></div>
+
+        <!-- Real-time Trades + Quick Trade -->
+        <div class="ui-bottom-grid">
+          <div class="ui-panel ui-trades-panel">
+            <div class="ui-panel-title">Real-time Trades</div>
+            <div class="table-responsive">
+              <table class="table ui-table ui-trades-table align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Type</th>
+                    <th>Volume</th>
+                    <th>Price</th>
+                    <th>SL</th>
+                    <th>TP</th>
+                    <th>P/L</th>
+                    <th class="text-end">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="tradesBody">
+                  <tr><td colspan="7" class="text-center">Select an account to view trades</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="ui-footnote">
+              Showing trades for: <strong id="lblScope">No account selected</strong>
+            </div>
+          </div>
+
+          <aside class="ui-panel ui-quick-panel">
+            <div class="ui-panel-title">Quick Trade</div>
+            <div class="ui-box mb-3">
+              <div class="ui-box-title">Trade Inputs</div>
+              
+              <div id="tradeInputs" style="display: none;">
+                <div class="row g-2">
+                  <div class="col-6"><input id="inpSymbol" class="ui-input" value="EURUSD" placeholder="Symbol"></div>
+                  <div class="col-6"><input id="inpLot" class="ui-input" value="0.10" placeholder="Lot"></div>
+                  <div class="col-6"><input id="inpSL" class="ui-input" placeholder="SL (optional)"></div>
+                  <div class="col-6"><input id="inpTP" class="ui-input" placeholder="TP (optional)"></div>
+                </div>
+                <div class="d-flex gap-2 mt-3">
+                  <button class="ui-btn ui-btn-buy w-50" id="btnBuy">Buy</button>
+                  <button class="ui-btn ui-btn-sell w-50" id="btnSell">Sell</button>
+                </div>
+              </div>
+
+              <div id="tradeDisabledMsg" class="ui-footnote" style="color:#7a818b; display: none;">
+                Trading is disabled for your profile.
+              </div>
+              <div id="noAccountSelectedMsg" class="ui-footnote" style="color:#7a818b; display: none;">
+                Select an MT5 account to enable trade entry.
+              </div>
+              <div id="quickTradeTarget" class="ui-footnote mt-2" style="display: none;">
+                Trading on: <strong id="quickTradeAccountName">-</strong>
+              </div>
+            </div>
+
+            <div class="ui-box">
+              <div class="ui-box-title">Real-time Log</div>
+              <div id="logBox" class="ui-log">System ready...</div>
+            </div>
+          </aside>
+        </div>
+
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const token = localStorage.getItem("token");
+if (!token) window.location.href = "/";
+
+let currentAccounts = [];
+let selectedAccountId = null;
+let canTrade = false;
+let logsInterval = null;
+let tradesInterval = null;
+
+
+// Logout
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  window.location.href = "/";
+});
+
+async function loadDashboard() {
+  try {
+    const res = await fetch("/dashboard", { headers: { "Authorization": "Bearer " + token } });
+    if (res.status === 401) {
+      localStorage.removeItem("token");
+      window.location.href = "/";
+      return;
+    }
+    const userData = await res.json();
+
+    document.getElementById("rolePill").textContent = `Role: ${userData.role === 'admin' ? 'Admin' : 'User'}`;
+    document.getElementById("userRoleDisplay").textContent = userData.role === 'admin' ? 'Admin' : 'User';
+    document.getElementById("usernameDisplay").textContent = userData.username || "User";
+    document.getElementById("userAvatar").textContent = (userData.username || "U").slice(0,1).toUpperCase();
+
+    canTrade = userData.can_trade || false;
+    document.getElementById("tradingPill").textContent = `Trading: ${canTrade ? 'Enabled' : 'Disabled'}`;
+
+    await loadUserMT5Accounts();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadUserMT5Accounts() {
+  try {
+    const res = await fetch("/mt5/accounts", { headers: { "Authorization": "Bearer " + token } });
+    const data = await res.json();
+    // ✅ SORT HERE
+    currentAccounts = (data.accounts || []).sort((a, b) => a.id - b.id);
+
+    document.getElementById("mt5Count").textContent = `MT5 Accounts: ${currentAccounts.length}`;
+
+    const selector = document.getElementById("accountSelector");
+    selector.innerHTML = `<option value="">Select MT5 Account</option>`;
+
+    currentAccounts.forEach(acc => {
+      const opt = document.createElement("option");
+      opt.value = acc.id;
+      opt.textContent = `${acc.name} (${acc.login})`;
+      selector.appendChild(opt);
+    });
+
+    // ✅ restore selected account
+    const savedAccountId = localStorage.getItem("selectedAccountId");
+
+    if (savedAccountId && currentAccounts.some(a => a.id == savedAccountId)) {
+      selector.value = savedAccountId;
+      selectedAccountId = savedAccountId;
+
+      updateLiveOverview(selectedAccountId);
+      updateQuickTradeSection(selectedAccountId);
+
+      if (selectedAccountId) {
+        updateRealTimeTrades(selectedAccountId);
+        startTradesPolling(selectedAccountId);
+        startLogsPolling(selectedAccountId);
+      }
+    } else {
+      selectedAccountId = null;
+    }
+
+    renderAccountCards(currentAccounts);
+    renderCopyTree()
+    updateCopySummary();
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function updateCopySummary() {
+  const masters = currentAccounts.filter(a => a.copy_role === "master").length;
+  const slaves = currentAccounts.filter(a => a.copy_role === "slave").length;
+  const unassigned = currentAccounts.filter(a => a.copy_role === "none").length;
+  document.getElementById("copySummary").textContent = `Masters: ${masters} | Slaves: ${slaves} | Unassigned: ${unassigned}`;
+}
+
+function renderCopyTree() {
+  const container = document.getElementById("copyTree");
+  if (!container) return;
+
+  const masters = currentAccounts.filter(a => a.copy_role === "master");
+  const slaves = currentAccounts.filter(a => a.copy_role === "slave");
+  const unassigned = currentAccounts.filter(a => a.copy_role === "none");
+
+  let html = "";
+
+  // =========================
+  // NO MASTER STATE
+  // =========================
+  if (masters.length === 0) {
+    html += `<div class="ui-copy-empty">No Master account selected yet.</div>`;
+  }
+
+  // =========================
+  // MASTER → SLAVES
+  // =========================
+  masters.forEach(master => {
+    const linkedSlaves = slaves.filter(s => s.master_account_id === master.id);
+
+    html += `
+      <div class="ui-copy-master">
+        <div class="ui-copy-master-title">
+          ${master.name} (${master.login})
+        </div>
+
+        <div class="ui-copy-slave-zone">
+          ${
+            linkedSlaves.length > 0
+              ? linkedSlaves.map(slave => `
+                  <div class="ui-copy-slave">
+                    ${slave.name} (${slave.login})
+                  </div>
+                `).join("")
+              : `<div class="ui-role-empty">No slaves linked</div>`
+          }
+        </div>
+      </div>
+    `;
+  });
+
+  // =========================
+  // UNASSIGNED
+  // =========================
+  html += `
+    <div class="ui-copy-none">
+      <div class="ui-copy-none-title">Unassigned Accounts</div>
+      <div class="ui-copy-none-list">
+        ${
+          unassigned.length > 0
+            ? unassigned.map(acc => `
+                <div class="ui-copy-none-item">
+                  ${acc.name} (${acc.login})
+                </div>
+              `).join("")
+            : `<div class="ui-role-empty">All accounts assigned</div>`
+        }
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+// ========================
+// RENDER CARDS
+// ========================
+function renderAccountCards(accounts) {
+  const container = document.getElementById("accountCards");
+  container.innerHTML = "";
+
+  if (accounts.length === 0) {
+    container.innerHTML = `<div class="ui-vpscard"><div class="ui-vpsname">No MT5 accounts yet</div></div>`;
+    return;
+  }
+
+  accounts.forEach(acc => {
+    const isDeployed = acc.state === "deployed" || acc.online === true;
+    const roleDisplay = (acc.copy_role || "none").toUpperCase();
+    const hasMasters = currentAccounts.some(a => a.copy_role === "master" && a.id !== acc.id);
+
+    let extraHTML = "";
+    // if (acc.copy_role === "master") {
+    //   extraHTML += `
+    //     <div class="form-check mt-2">
+    //       <input class="form-check-input strict-checkbox" type="checkbox" 
+    //              data-account-id="${acc.id}" ${acc.strict_mode ? 'checked' : ''}>
+    //       <label class="form-check-label">Strict copy: if any slaves fails</label>
+    //     </div>`;
+    // }
+    if (acc.copy_role === "slave") {
+      extraHTML += `
+        <div class="mt-2">
+          <select class="ui-select copy-direction" data-account-id="${acc.id}">
+            <option value="same" ${acc.copy_direction === "same" ? "selected" : ""}>Same Direction</option>
+            <option value="opposite" ${acc.copy_direction === "opposite" ? "selected" : ""}>Opposite Direction</option>
+          </select>
+        </div>`;
+    }
+
+    const card = document.createElement("div");
+    card.className = `ui-vpscard ${isDeployed ? 'glow' : ''}`;
+    card.innerHTML = `
+      <div class="d-flex align-items-center justify-content-between">
+        <div class="ui-vpsname">${acc.name}</div>
+      </div>
+      <div class="ui-vpsmeta">
+        <div><span class="ui-muted">Login:</span> ${acc.login}</div>
+        <div><span class="ui-muted">Server:</span> ${acc.server}</div>
+        <div><span class="ui-muted">Role:</span> <strong>${roleDisplay}</strong></div>
+      </div>
+      <div class="ui-vpsfooter">
+        <div class="ui-vpsstatus-wrap">
+          <span class="ui-dot ${isDeployed ? 'online' : 'offline'}"></span>
+          <span class="ui-vpsstatus">${isDeployed ? 'Deployed' : 'Undeployed'}</span>
+        </div>
+        <div class="ui-vpsactions">
+          <div class="ui-role-picker" data-account-id="${acc.id}">
+            <button class="ui-linkbtn ui-linkbtn-role" type="button" data-role-toggle>
+              Role: ${roleDisplay}
+            </button>
+            <div class="ui-role-menu">
+              <button class="ui-role-option" data-role="none">None</button>
+              <button class="ui-role-option" data-role="master">Master</button>
+              <div class="ui-role-subwrap">
+                <button class="ui-role-option slave-btn ${!hasMasters ? 'disabled' : ''}" 
+                        data-role="slave"
+                        ${!hasMasters ? 'disabled' : ''}>
+                  Slave ▶
+                </button>
+                <div class="ui-role-submenu"></div>
+              </div>
+            </div>
+          </div>
+
+          <button class="ui-linkbtn ui-linkbtn-vps deploy-btn" data-id="${acc.id}">
+            ${isDeployed ? 'Undeploy' : 'Deploy'}
+          </button>
+        </div>
+      </div>
+      ${extraHTML}
+    `;
+
+    container.appendChild(card);
+  });
+
+  attachRoleListeners();
+}
+
+// ========================
+// ROLE UPDATE
+// ========================
+async function updateRole(accountId, payload) {
+  await fetch(`/mt5/accounts/${accountId}/role`, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  await new Promise(r => setTimeout(r, 300));
+  await loadUserMT5Accounts();
+}
+
+
+// ========================
+// ROLE HANDLERS
+// ========================
+function attachRoleListeners() {
+
+  document.querySelectorAll(".ui-role-picker").forEach(picker => {
+
+    const accountId = parseInt(picker.dataset.accountId);
+    const toggleBtn = picker.querySelector("[data-role-toggle]");
+    const slaveBtn = picker.querySelector('[data-role="slave"]');
+    const submenu = picker.querySelector(".ui-role-submenu");
+
+    // Toggle menu
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll(".ui-role-picker")
+        .forEach(p => p.classList.remove("open"));
+      picker.classList.toggle("open");
+    });
+
+    // None + Master
+    picker.querySelectorAll('[data-role="none"],[data-role="master"]')
+      .forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          await updateRole(accountId, { role: btn.dataset.role });
+        });
+      });
+
+    // SLAVE
+    if (slaveBtn && submenu && !slaveBtn.disabled) {
+      slaveBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+
+        submenu.innerHTML = "";
+
+        const masters = currentAccounts.filter(a =>
+          a.id !== accountId && a.copy_role === "master"
+        );
+
+        masters.forEach(master => {
+          const btn = document.createElement("button");
+          btn.className = "ui-role-option";
+          btn.textContent = `${master.name} (${master.login})`;
+
+          btn.onclick = async () => {
+            await updateRole(accountId, {
+              role: "slave",
+              master_account_id: master.id
+            });
+          };
+
+          submenu.appendChild(btn);
+        });
+
+        // ✅ LIGHT THEME FIX
+        submenu.style.display = "block";
+        submenu.style.position = "absolute";
+        submenu.style.background = "#ffffff";
+        submenu.style.color = "#000";
+        submenu.style.border = "1px solid #ccc";
+        submenu.style.zIndex = "9999";
+      });
+    }
+  });
+
+  // Strict Mode
+  document.querySelectorAll(".strict-checkbox").forEach(chk => {
+    chk.addEventListener("change", async () => {
+      const accountId = chk.dataset.accountId;
+      await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ strict_mode: chk.checked })
+      });
+    });
+  });
+
+  // Copy Direction
+  document.querySelectorAll(".copy-direction").forEach(select => {
+    select.addEventListener("change", async () => {
+      const accountId = select.dataset.accountId;
+      await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ copy_direction: select.value })
+      });
+    });
+  });
+
+  // Deploy buttons
+  document.querySelectorAll(".deploy-btn").forEach(btn => {
+    btn.addEventListener("click", () => handleDeployClick(btn));
+  });
+
+  // Close menus
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".ui-role-picker").forEach(p => p.classList.remove("open"));
+  });
+}
+
+async function handleDeployClick(btn) {
+  const accountId = btn.dataset.id;
+  const action = btn.textContent.toLowerCase().includes("undeploy") ? "undeploy" : "deploy";
+
+  btn.disabled = true;
+  btn.textContent = "Processing...";
+
+  try {
+    await fetch(`/mt5/accounts/${accountId}/${action}`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token }
+    });
+    await loadUserMT5Accounts();
+  } catch (err) {
+    alert("Action failed");
+    console.error(err);
+  }
+}
+
+// Account selector
+document.getElementById("accountSelector").addEventListener("change", (e) => {
+  selectedAccountId = e.target.value;
+
+  localStorage.setItem("selectedAccountId", selectedAccountId);
+
+  updateLiveOverview(selectedAccountId);
+  updateQuickTradeSection(selectedAccountId);
+
+  // 🔥 force immediate update FIRST
+  updateRealTimeTrades(selectedAccountId);
+
+  // 🔥 then start polling
+  startTradesPolling(selectedAccountId);
+
+  startLogsPolling(selectedAccountId);
+});
+
+
+function updateLiveOverview(selectedId) {
+  const account = currentAccounts.find(a => a.id == selectedId);
+  if (!account) {
+    document.getElementById("connStatus").textContent = "Unknown";
+    document.getElementById("acctLogin").textContent = "-";
+    document.getElementById("acctServer").textContent = "-";
+    document.getElementById("connDot").className = "ui-dot offline";
+    return;
+  }
+
+  const isConnected = account.online || account.state === "deployed";
+  document.getElementById("connStatus").textContent = isConnected ? "Connected" : "Offline";
+  document.getElementById("acctLogin").textContent = account.login;
+  document.getElementById("acctServer").textContent = account.server;
+  document.getElementById("connDot").className = `ui-dot ${isConnected ? 'online' : 'offline'}`;
+}
+
+async function updateRealTimeTrades(accountId) {
+  const tbody = document.getElementById("tradesBody");
+  const lblScope = document.getElementById("lblScope");
+
+  const account = currentAccounts.find(a => a.id == accountId);
+
+  lblScope.textContent = account
+    ? `${account.name} (${account.login})`
+    : "No account selected";
+
+  if (!accountId) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center">Select an account</td></tr>`;
+    return;
+  }
+
+  try {
+    const res = await fetch(`/mt5/accounts/${accountId}/positions`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    const data = await res.json();
+
+    const positions = data.positions || [];
+
+    if (!positions.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center">No open trades</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = positions.map(p => {
+
+      const pnl = Number(p.profit || 0);
+      const pnlColor =
+        pnl > 0 ? "color: #00c853; font-weight:600;" :
+        pnl < 0 ? "color: #ff1744; font-weight:600;" :
+        "color: #999;";
+
+      const pnlSign = pnl > 0 ? "+" : "";
+
+      return `
+        <tr>
+          <td>${p.symbol}</td>
+          <td>${p.type.replace("POSITION_TYPE_", "")}</td>
+          <td>${p.volume}</td>
+          <td>${p.openPrice}</td>
+          <td>${p.stopLoss || "-"}</td>
+          <td>${p.takeProfit || "-"}</td>
+
+          <!-- 🔥 NEW PNL COLUMN -->
+          <td style="${pnlColor}">
+            ${pnlSign}${pnl.toFixed(2)}
+          </td>
+
+          <td class="text-end">
+            <button class="btn btn-sm btn-danger" onclick="closeTrade('${p.id}')">
+              Close
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function updateQuickTradeSection(selectedId) {
+  const tradeInputs = document.getElementById("tradeInputs");
+  const tradeDisabledMsg = document.getElementById("tradeDisabledMsg");
+  const noAccountMsg = document.getElementById("noAccountSelectedMsg");
+  const quickTradeTarget = document.getElementById("quickTradeTarget");
+  const quickTradeAccountName = document.getElementById("quickTradeAccountName");
+
+  if (!canTrade) {
+    tradeInputs.style.display = "none";
+    tradeDisabledMsg.style.display = "block";
+    noAccountMsg.style.display = "none";
+    quickTradeTarget.style.display = "none";
+    return;
+  }
+
+  if (!selectedId) {
+    tradeInputs.style.display = "none";
+    tradeDisabledMsg.style.display = "none";
+    noAccountMsg.style.display = "block";
+    quickTradeTarget.style.display = "none";
+    return;
+  }
+
+  const account = currentAccounts.find(a => a.id == selectedId);
+  quickTradeAccountName.textContent = account ? account.name : "-";
+  tradeInputs.style.display = "block";
+  tradeDisabledMsg.style.display = "none";
+  noAccountMsg.style.display = "none";
+  quickTradeTarget.style.display = "block";
+}
+
+// ========================
+// QUICK TRADE - IMPROVED
+// ========================
+
+const btnBuy = document.getElementById("btnBuy");
+const btnSell = document.getElementById("btnSell");
+
+btnBuy.addEventListener("click", () => placeTrade("buy"));
+btnSell.addEventListener("click", () => placeTrade("sell"));
+
+async function placeTrade(action) {
+  if (!selectedAccountId) {
+    alert("Please select an MT5 account first");
+    return;
+  }
+
+  const symbol = document.getElementById("inpSymbol").value.trim();
+  const volume = parseFloat(document.getElementById("inpLot").value);
+
+  if (!symbol || isNaN(volume) || volume <= 0) {
+    alert("Please enter valid Symbol and Lot size");
+    return;
+  }
+
+  // Disable both buttons and show processing state
+  const originalBuyText = btnBuy.textContent;
+  const originalSellText = btnSell.textContent;
+
+  btnBuy.disabled = true;
+  btnSell.disabled = true;
+  btnBuy.textContent = "Processing...";
+  btnSell.textContent = "Processing...";
+
+  const payload = {
+    action,
+    symbol: symbol,
+    volume: volume,
+    sl: parseFloat(document.getElementById("inpSL").value) || null,
+    tp: parseFloat(document.getElementById("inpTP").value) || null
+  };
+
+  try {
+    const res = await fetch(`/mt5/accounts/${selectedAccountId}/trade`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || "Trade failed");
+
+    log(`✅ ${action.toUpperCase()} order placed successfully for ${symbol}`);
+    
+  } catch (err) {
+    log(`❌ ${err.message}`);
+    console.error(err);
+  } finally {
+    // Always restore buttons (even if error occurs)
+    btnBuy.disabled = false;
+    btnSell.disabled = false;
+    btnBuy.textContent = originalBuyText;
+    btnSell.textContent = originalSellText;
+  }
+}
+
+function startTradesPolling(accountId) {
+  if (tradesInterval) clearInterval(tradesInterval);
+
+  updateRealTimeTrades(accountId);
+
+  tradesInterval = setInterval(() => {
+    updateRealTimeTrades(accountId);
+  }, 3000);
+}
+
+async function closeTrade(positionId) {
+  if (!selectedAccountId) return;
+
+  if (!confirm("Close this trade?")) return;
+
+  try {
+    const res = await fetch(`/mt5/accounts/${selectedAccountId}/close-position`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ position_id: positionId })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || "Close failed");
+
+    log(`🔻 Trade closed successfully`);
+
+    updateRealTimeTrades(selectedAccountId);
+
+  } catch (err) {
+    log(`❌ ${err.message}`);
+  }
+}
+
+async function loadLogs(accountId) {
+  if (!accountId) return;
+
+  try {
+    const res = await fetch(`/mt5/accounts/${accountId}/logs`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    const logs = await res.json();
+
+    const box = document.getElementById("logBox");
+
+    // // 🔥 FORCE newest first (very important)
+    // const sorted = logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const logsSorted = logs; //.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    box.innerHTML = logsSorted.map(l => {
+
+      const level = (l.level || "INFO").toUpperCase();
+
+      let cls = "log-default";
+
+      if (level === "INFO") cls = "log-info";
+      else if (level === "ERROR") cls = "log-error";
+      else if (level === "WARNING") cls = "log-warning";
+      else if (level === "TRADE") cls = "log-trade";
+
+      return `
+        <div class="${cls}">
+          [${level}] ${l.message}
+        </div>
+      `;
+    }).join("");
+
+    // 🔥 keep scroll at TOP (latest visible first)
+    //box.scrollTop = 0;
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function startLogsPolling(accountId) {
+  if (logsInterval) clearInterval(logsInterval);
+
+  if (!accountId) return;
+
+  loadLogs(accountId);
+
+  logsInterval = setInterval(() => {
+    loadLogs(accountId);
+  }, 2000); // 🔥 faster refresh
+}
+
+function startHeartbeat(pageName) {
+  setInterval(() => {
+    fetch("admin/activity/heartbeat", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        page: pageName,
+        action: "heartbeat"
+      })
+    });
+  }, 15000);
+}
+
+function log(msg, level = "INFO") {
+  const box = document.getElementById("logBox");
+
+  let cls = "log-default";
+
+  if (level === "INFO") cls = "log-info";
+  else if (level === "ERROR") cls = "log-error";
+  else if (level === "WARNING") cls = "log-warning";
+  else if (level === "TRADE") cls = "log-trade";
+
+  const div = document.createElement("div");
+  div.className = cls;
+  div.textContent = `[${level}] ${msg}`;
+
+  box.prepend(div);
+}
+
+// Start
+loadDashboard();
+startHeartbeat("dashboard");
+</script>
+</body>
+</html>
