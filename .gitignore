@@ -20,6 +20,7 @@ Thumbs.db
 *.log
 test.ipynb
 lines.txt
+.env
 .metaapi/
 images/
 docs/
