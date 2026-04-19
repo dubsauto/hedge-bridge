@@ -8,7 +8,7 @@ from datetime import datetime
 
 from app.auth import SECRET_KEY, ALGORITHM, security, get_current_user
 from app.database import get_db
-from app.model import TradingAccount, User, CopyRelationship, BotLog
+from app.model import TradingAccount, User, CopyRelationship, BotLog, CopyTradeLink, AccountLot
 from app.services.logger import log
 from hedgebridge.account_management import account_manager   
 from hedgebridge.trading import trader
@@ -23,6 +23,7 @@ async def get_mt5_accounts(
     db: Session = Depends(get_db)
 ):
     try:
+        #print("starting getting accounts")
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("user_id")
 
@@ -34,47 +35,69 @@ async def get_mt5_accounts(
         account_list = []
 
         for acc in accounts:
-            # Determine role from CopyRelationship
-            # Determine role from CopyRelationship
-            as_master = db.query(CopyRelationship).filter(
-                CopyRelationship.master_account_id == acc.id,
-                CopyRelationship.slave_account_id.is_(None)   # or just check existence
-            ).first()
 
+            # MASTER → count slaves
+            slave_count = db.query(CopyRelationship).filter(
+                CopyRelationship.master_account_id == acc.id
+            ).count()
+            role = "none"
+
+            if slave_count > 0:
+                role = "master"
+
+            slave_count = slave_count-1 if slave_count > 0 else 0 #exclude self if master
+
+            # SLAVE → get relationship
             as_slave_rel = db.query(CopyRelationship).filter(
                 CopyRelationship.slave_account_id == acc.id
             ).first()
 
-            role = "none"
+            
             master_account_id = None
+            master_name = None
             copy_direction = "same"
             strict_mode = False
 
-            if as_master:
-                role = "master"
-            elif as_slave_rel:
+            if as_slave_rel:
                 role = "slave"
                 master_account_id = as_slave_rel.master_account_id
                 copy_direction = as_slave_rel.copy_direction
                 strict_mode = as_slave_rel.strict_mode
+
+                # 🔥 GET MASTER NAME
+                master = db.query(TradingAccount).filter(
+                    TradingAccount.id == master_account_id
+                ).first()
+
+                if master:
+                    master_name = master.name
+
+
+            deployed = acc.state.lower() == "deployed"
+            account_metrics = {}
+
+            if deployed and acc.metaapi_account_id:
+                account_metrics = await account_manager.get_account_metrics(acc.metaapi_account_id) if acc.metaapi_account_id else {}
 
             account_list.append({
                 "id": acc.id,
                 "name": acc.name,
                 "login": acc.login,
                 "server": acc.server,
-                "magic": acc.magic,
-                "manual_trades": acc.manual_trades,
-                "use_dedicated_ip": acc.use_dedicated_ip,
-                "metaapi_account_id": acc.metaapi_account_id,
                 "state": acc.state,
                 "online": acc.connection_status == "connected",
+
                 "copy_role": role,
                 "master_account_id": master_account_id,
+                "master_name": master_name,        # 🔥 NEW
+                "slave_count": slave_count,        # 🔥 NEW
                 "copy_direction": copy_direction,
-                "strict_mode": strict_mode
+                "strict_mode": strict_mode,
+                "balance": account_metrics.get("balance", " N/A"),
+                "equity": account_metrics.get("equity", " N/A"),
+                "latency_ms": account_metrics.get("latency_ms", " N/A")
             })
-
+            #print("ending accounts")
         return {"accounts": account_list}
 
     except JWTError:
@@ -119,6 +142,7 @@ async def deploy_mt5_account(
         )
 
         result = await account_manager.deploy(trading_account.metaapi_account_id)
+        print(result)
 
         if result.get("success"):
             trading_account.state = "deployed"
@@ -410,40 +434,85 @@ async def delete_mt5_account(
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
-        print(f"🗑 Deleting account {account.id} (MetaApi: {account.metaapi_account_id})")
+        meta_id = account.metaapi_account_id
+
+        print(f"🗑 Deleting account {account.id}")
 
         # =========================
-        # 2. DELETE FROM METAAPI FIRST
+        # 2. UNDEPLOY + REMOVE METAAPI ACCOUNT
         # =========================
-        if account.metaapi_account_id:
-            result = await account_manager.remove_account(account.metaapi_account_id)
+        if meta_id:
+            try:
+                # force undeploy first (safe cleanup)
+                await account_manager.undeploy(meta_id)
 
-            if not result.get("success"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=result.get("message")
-                )
+                # then remove account
+                result = await account_manager.remove_account(meta_id)
+
+                if not result.get("success"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=result.get("message", "MetaAPI deletion failed")
+                    )
+
+            except Exception as e:
+                print(f"⚠ MetaAPI cleanup warning: {e}")
+                # continue deletion anyway (do not block DB cleanup)
 
         # =========================
-        # 3. DELETE FROM DATABASE
+        # 3. DELETE COPY RELATIONSHIPS
+        # =========================
+        db.query(CopyRelationship).filter(
+            (CopyRelationship.master_account_id == account_id) |
+            (CopyRelationship.slave_account_id == account_id)
+        ).delete(synchronize_session=False)
+
+        # =========================
+        # 4. DELETE COPY TRADE LINKS
+        # =========================
+        db.query(CopyTradeLink).filter(
+            (CopyTradeLink.master_account_id == account_id) |
+            (CopyTradeLink.slave_account_id == account_id)
+        ).delete(synchronize_session=False)
+
+        # =========================
+        # 5. DELETE BOT LOGS
+        # =========================
+        db.query(BotLog).filter(
+            BotLog.account_id == account_id
+        ).delete(synchronize_session=False)
+
+        # =========================
+        # 6. OPTIONAL: USER PERMISSION CLEANUP
+        # (only if you tie permissions to accounts in future)
+        # =========================
+        # db.query(UserPermission).filter(
+        #     UserPermission.user_id == account.owner_user_id
+        # ).delete(synchronize_session=False)
+
+        # =========================
+        # 7. DELETE ACCOUNT ITSELF
         # =========================
         db.delete(account)
+
         db.commit()
 
-        print(f"✅ Account {account.id} deleted from DB")
+        print(f"✅ Account {account_id} fully deleted (DB + MetaAPI + relations)")
 
         return {
-            "message": "Account deleted successfully",
-            "account_id": account.id
+            "message": "Account and all related data deleted successfully",
+            "account_id": account_id
         }
 
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     except Exception as e:
+        db.rollback()
         print(f"❌ Delete route error: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
     
+
 # =========================
 # SET ACCOUNT ROLE (Master / Slave / None)
 # =========================
@@ -526,13 +595,13 @@ async def set_account_role(
                 account_id=master_id,
                 level="INFO",
                 category="ROLE",
-                message=f"Set as SLAVE → linked to master {master_id}",
+                message=f"Set as SLAVE → linked to master {master.name}",
             )
             log(db=db,
                 account_id=account_id,
                 level="INFO",
                 category="ROLE",
-                message=f"New slave linked → account {account_id}",
+                message=f"New slave linked → account {account.name} linked to {master.name}",
             )
         # =========================
         # MASTER
@@ -659,7 +728,7 @@ async def update_copy_settings(
                 account_id=relationship.master_account_id,
                 level="INFO",
                 category="COPY_SETTINGS",
-                message=f"Slave {account_id} updated copy direction → {direction}",
+                message=f"Slave {account.name} updated copy direction → {direction}",
                 raw_json=data
             )
         # =========================
@@ -685,7 +754,7 @@ async def update_copy_settings(
                 account_id=relationship.slave_account_id,
                 level="INFO",
                 category="COPY_SETTINGS",
-                message=f"Master {account_id} updated strict mode → {relationship.strict_mode}",
+                message=f"Master {account.name} updated strict mode → {relationship.strict_mode}",
                 raw_json=data
             )
 
@@ -721,9 +790,6 @@ async def update_copy_settings(
         raise HTTPException(status_code=500, detail=str(e))
     
 
-# =========================
-# QUICK TRADE (BUY / SELL)
-# =========================
 @router.post("/accounts/{account_id}/trade")
 async def quick_trade(
     account_id: int,
@@ -757,27 +823,144 @@ async def quick_trade(
         # =========================
         action = data.get("action")
         symbol = data.get("symbol")
+        sl_tp_mode = data.get("sl_tp_mode", "price")
         volume = float(data.get("volume", 0))
+        fixed_lot_enabled = data.get("fixed_lot_enabled", False)
+
+        if fixed_lot_enabled:
+            lot_row = db.query(AccountLot).filter_by(account_id=account_id).first()
+            if lot_row:
+                volume = lot_row.lot_size
+
         sl = data.get("sl")
         tp = data.get("tp")
 
+        
+
+        sl = float(sl) if sl is not None else None
+        tp = float(tp) if tp is not None else None
+
+        # =========================
+        # BASIC VALIDATION
+        # =========================
         if action not in ["buy", "sell"]:
             raise HTTPException(status_code=400, detail="Invalid action (buy/sell only)")
 
-        if not symbol or volume <= 0:
-            raise HTTPException(status_code=400, detail="Invalid symbol or volume")
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Symbol is required")
+
+        if volume <= 0:
+            raise HTTPException(status_code=400, detail="Volume must be greater than 0")
 
         # =========================
         # LOG INTENT
         # =========================
-        
-        log(db=db,
+        log(
+            db=db,
             account_id=account_id,
             level="INFO",
             category="EXECUTION",
-            message=f"User requested {action.upper()} {symbol} {volume}",
+            message=f"Request: {action.upper()} {symbol} {volume}",
             raw_json=data
         )
+
+        # =========================
+        # 🔥 SL/TP PROCESSING
+        # =========================
+        try:
+            connection = await trader._get_connection(account.metaapi_account_id)
+
+            symbol_spec = await connection.get_symbol_specification(symbol)
+            symbol_price = await connection.get_symbol_price(symbol)
+
+            if not symbol_spec or not symbol_price:
+                raise Exception("Symbol data unavailable")
+
+            point = (
+                symbol_spec.get("point")
+                or symbol_spec.get("tickSize")
+                or symbol_spec.get("pipSize")
+            )
+
+            if point is None:
+                raise Exception(f"Missing point size in symbol spec: {symbol_spec}")
+
+            point = float(point)
+            digits = symbol_spec.get("digits", 5)
+            stops_level = symbol_spec.get("stopsLevel", 0)
+
+            bid = symbol_price.get("bid")
+            ask = symbol_price.get("ask")
+
+            print("SYMBOL SPEC:", symbol_spec)
+            print("POINT:", point)
+            print("SL:", sl, "TP:", tp)
+
+            if not bid or not ask:
+                raise Exception("Price data unavailable")
+
+            entry_price = ask if action == "buy" else bid
+
+            # -------------------------
+            # POINTS MODE
+            # -------------------------
+            if sl_tp_mode == "points":
+
+                if sl is not None and sl <= 0:
+                    raise Exception("SL must be > 0 in points mode")
+
+                if tp is not None and tp <= 0:
+                    raise Exception("TP must be > 0 in points mode")
+
+                if sl is not None:
+                    sl = entry_price - (sl * point) if action == "buy" else entry_price + (sl * point)
+
+                if tp is not None:
+                    tp = entry_price + (tp * point) if action == "buy" else entry_price - (tp * point)
+
+            # -------------------------
+            # PRICE MODE
+            # -------------------------
+            elif sl_tp_mode == "price":
+                pass
+
+            else:
+                raise Exception("Invalid SL/TP mode")
+
+            # -------------------------
+            # ROUND VALUES
+            # -------------------------
+            if sl is not None:
+                sl = round(sl, digits)
+
+            if tp is not None:
+                tp = round(tp, digits)
+
+            # -------------------------
+            # 🔥 BROKER STOP LEVEL CHECK
+            # -------------------------
+            min_distance = stops_level * point
+
+            if sl is not None and abs(entry_price - sl) < min_distance:
+                raise Exception(f"SL too close (min distance: {round(min_distance, digits)})")
+
+            if tp is not None and abs(entry_price - tp) < min_distance:
+                raise Exception(f"TP too close (min distance: {round(min_distance, digits)})")
+
+            print(f"🎯 Final SL/TP → SL={sl}, TP={tp}, mode={sl_tp_mode}")
+
+        except Exception as e:
+            # 🔴 LOG CONVERSION ERROR
+            log(
+                db=db,
+                account_id=account_id,
+                level="ERROR",
+                category="VALIDATION",
+                message=f"SL/TP error: {str(e)}",
+                raw_json=data
+            )
+
+            raise HTTPException(status_code=400, detail=str(e))
 
         # =========================
         # MAGIC RULE
@@ -809,21 +992,27 @@ async def quick_trade(
             )
 
         # =========================
-        # RESPONSE
+        # HANDLE FAILURE
         # =========================
         if not result.get("success"):
+            error_msg = result.get("error", "Unknown execution error")
+
             log(
                 db=db,
                 account_id=account_id,
                 level="ERROR",
                 category="EXECUTION",
-                message=f"{action.upper()} failed: {result.get('error')}"
+                message=f"{action.upper()} failed: {error_msg}",
+                raw_json=result
             )
 
-            raise HTTPException(status_code=500, detail=result.get("error"))
+            raise HTTPException(status_code=500, detail=error_msg)
 
-        # ✅ SUCCESS LOG
-        log(db=db,
+        # =========================
+        # SUCCESS
+        # =========================
+        log(
+            db=db,
             account_id=account_id,
             level="TRADE",
             category="EXECUTION",
@@ -838,20 +1027,171 @@ async def quick_trade(
         }
 
     except HTTPException as e:
+        # 🔴 LOG ALL HTTP ERRORS
+        log(
+            db=db,
+            account_id=account_id,
+            level="ERROR",
+            category="VALIDATION",
+            message=f"HTTP error: {e.detail}",
+            raw_json=data
+        )
         raise e
 
     except Exception as e:
         print(f"❌ Trade error: {e}")
 
-        # 🔴 CRITICAL ERROR LOG
-        log(db=db,
+        # 🔴 CRITICAL ERROR
+        log(
+            db=db,
             account_id=account_id,
             level="ERROR",
             category="EXECUTION",
             message=f"Trade exception: {str(e)}",
+            raw_json=data
         )
 
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# # =========================
+# # QUICK TRADE (BUY / SELL)
+# # =========================
+# @router.post("/accounts/{account_id}/trade")
+# async def quick_trade(
+#     account_id: int,
+#     data: dict,
+#     payload: dict = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     try:
+#         print(f"⚡ Quick trade request for account {account_id} with data: {data}")
+#         user_id = payload.get("user_id")
+
+#         # =========================
+#         # VALIDATE ACCOUNT
+#         # =========================
+#         account = db.query(TradingAccount).filter(
+#             TradingAccount.id == account_id,
+#             TradingAccount.owner_user_id == user_id
+#         ).first()
+
+#         if not account:
+#             raise HTTPException(status_code=404, detail="Account not found")
+
+#         if not account.metaapi_account_id:
+#             raise HTTPException(status_code=400, detail="Account not connected to MetaAPI")
+
+#         if account.connection_status != "connected":
+#             raise HTTPException(status_code=400, detail="Account is not connected")
+
+#         # =========================
+#         # INPUTS
+#         # =========================
+#         action = data.get("action")
+#         symbol = data.get("symbol")
+#         sl_tp_mode = data.get("sl_tp_mode", "price")
+#         volume = float(data.get("volume", 0))
+#         fixed_lot_enabled = data.get("fixed_lot_enabled", False)
+
+#         if fixed_lot_enabled:
+#             lot_row = db.query(AccountLot).filter_by(account_id=account_id).first()
+#             if lot_row:
+#                 volume = lot_row.lot_size
+
+#         sl = data.get("sl")
+#         tp = data.get("tp")
+
+#         if action not in ["buy", "sell"]:
+#             raise HTTPException(status_code=400, detail="Invalid action (buy/sell only)")
+
+#         if not symbol or volume <= 0:
+#             raise HTTPException(status_code=400, detail="Invalid symbol or volume")
+
+#         # =========================
+#         # LOG INTENT
+#         # =========================
+        
+#         log(db=db,
+#             account_id=account_id,
+#             level="INFO",
+#             category="EXECUTION",
+#             message=f"User requested {action.upper()} {symbol} {volume}",
+#             raw_json=data
+#         )
+
+#         # =========================
+#         # MAGIC RULE
+#         # =========================
+#         magic = account.magic if not account.manual_trades else 0
+
+#         # =========================
+#         # EXECUTE TRADE
+#         # =========================
+#         if action == "buy":
+#             result = await trader.buy(
+#                 account.metaapi_account_id,
+#                 symbol,
+#                 volume,
+#                 sl,
+#                 tp,
+#                 comment="QuickTrade",
+#                 magic=magic
+#             )
+#         else:
+#             result = await trader.sell(
+#                 account.metaapi_account_id,
+#                 symbol,
+#                 volume,
+#                 sl,
+#                 tp,
+#                 comment="QuickTrade",
+#                 magic=magic
+#             )
+
+#         # =========================
+#         # RESPONSE
+#         # =========================
+#         if not result.get("success"):
+#             log(
+#                 db=db,
+#                 account_id=account_id,
+#                 level="ERROR",
+#                 category="EXECUTION",
+#                 message=f"{action.upper()} failed: {result.get('error')}"
+#             )
+
+#             raise HTTPException(status_code=500, detail=result.get("error"))
+
+#         # ✅ SUCCESS LOG
+#         log(db=db,
+#             account_id=account_id,
+#             level="TRADE",
+#             category="EXECUTION",
+#             message=f"{action.upper()} executed {symbol} {volume}",
+#             raw_json=result.get("result")
+#         )
+
+#         return {
+#             "success": True,
+#             "message": f"{action.upper()} order placed",
+#             "data": result.get("result")
+#         }
+
+#     except HTTPException as e:
+#         raise e
+
+#     except Exception as e:
+#         print(f"❌ Trade error: {e}")
+
+#         # 🔴 CRITICAL ERROR LOG
+#         log(db=db,
+#             account_id=account_id,
+#             level="ERROR",
+#             category="EXECUTION",
+#             message=f"Trade exception: {str(e)}",
+#         )
+
+#         raise HTTPException(status_code=500, detail=str(e))
     
 # =========================
 # CLOSE TRADE
@@ -991,10 +1331,58 @@ async def get_positions(
         raise HTTPException(status_code=403, detail="Unauthorized")
 
     try:
-        connection = await trader._get_connection(account.metaapi_account_id)
-        positions = await connection.get_positions()
-
+        deployed = account.state.lower() == "deployed"
+        if deployed:
+            connection = await trader._get_connection(account.metaapi_account_id)
+            positions = await connection.get_positions()
+        else:
+            positions = []
         return {"success": True, "positions": positions}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+        # for acc in accounts:
+        #     # Determine role from CopyRelationship
+        #     # Determine role from CopyRelationship
+        #     as_master = db.query(CopyRelationship).filter(
+        #         CopyRelationship.master_account_id == acc.id,
+        #         CopyRelationship.slave_account_id.is_(None)   # or just check existence
+        #     ).first()
+
+        #     as_slave_rel = db.query(CopyRelationship).filter(
+        #         CopyRelationship.slave_account_id == acc.id
+        #     ).first()
+
+        #     role = "none"
+        #     master_account_id = None
+        #     copy_direction = "same"
+        #     strict_mode = False
+
+        #     if as_master:
+        #         role = "master"
+        #     elif as_slave_rel:
+        #         role = "slave"
+        #         master_account_id = as_slave_rel.master_account_id
+        #         copy_direction = as_slave_rel.copy_direction
+        #         strict_mode = as_slave_rel.strict_mode
+
+        #     account_list.append({
+        #         "id": acc.id,
+        #         "name": acc.name,
+        #         "login": acc.login,
+        #         "server": acc.server,
+        #         "magic": acc.magic,
+        #         "manual_trades": acc.manual_trades,
+        #         "use_dedicated_ip": acc.use_dedicated_ip,
+        #         "metaapi_account_id": acc.metaapi_account_id,
+        #         "state": acc.state,
+        #         "online": acc.connection_status == "connected",
+        #         "copy_role": role,
+        #         "master_account_id": master_account_id,
+        #         "copy_direction": copy_direction,
+        #         "strict_mode": strict_mode
+        #     })

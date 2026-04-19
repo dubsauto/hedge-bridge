@@ -7,11 +7,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException
 
+
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 security = HTTPBearer()
-
 
 def hash_password(password: str) -> str:
     """Hash password using bcrypt (modern & reliable)"""

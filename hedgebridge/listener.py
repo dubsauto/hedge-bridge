@@ -211,14 +211,14 @@ class MetaApiTradeListener(ABC):
 
                     await copy_engine.handle_close_trade(
                         db=db,
-                        master_account_id=self.account_id,
-                        master_ticket=ticket
+                        account_id=self.account_id,
+                        closed_ticket=ticket
                     )
 
-                    await copy_engine.handle_slave_close(
-                        db=db,
-                        slave_ticket=ticket
-                    )
+                    # await copy_engine.handle_slave_close(
+                    #     db=db,
+                    #     slave_ticket=ticket
+                    # )
 
         except Exception as e:
             print(f"❌ positions update error: {e}")

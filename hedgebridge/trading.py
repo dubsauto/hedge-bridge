@@ -40,6 +40,33 @@ class MT5Trader:
 
         return connection
 
+    async def get_price(self, account_id: str, symbol: str) -> Dict[str, float]:
+        """
+        Get current market price (bid/ask) for a symbol
+        """
+        try:
+            connection = await self._get_connection(account_id)
+
+            price = await connection.get_symbol_price(symbol)
+
+            # MetaApi returns:
+            # {
+            #   'symbol': 'EURUSD',
+            #   'bid': 1.12345,
+            #   'ask': 1.12357,
+            #   ...
+            # }
+
+            if not price:
+                raise Exception("No price data returned")
+
+            return {
+                "bid": price.get("bid"),
+                "ask": price.get("ask")
+            }
+
+        except Exception as e:
+            raise Exception(f"get_price failed: {str(e)}")
     # ========================
     # MARKET ORDERS
     # ========================

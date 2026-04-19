@@ -3,13 +3,23 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
-from datetime import datetime, timedelta
-from sqlalchemy import desc
-
+from datetime import datetime
 from app.database import get_db
-from app.model import User, ActivityLog, ActiveUser
 import time
-from app.auth import SECRET_KEY, ALGORITHM, security, get_current_user
+from app.auth import SECRET_KEY, ALGORITHM, security
+from app.auth import hash_password
+from app.model import (
+    User,
+    TradingAccount,
+    UserPermission,
+    ActivityLog,
+    ActiveUser,
+    CopyRelationship,
+    CopyTradeLink,
+    BotLog
+)
+from hedgebridge.account_management import account_manager
+
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -25,16 +35,23 @@ async def get_profiles(
 ):
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("role") != "admin":
+        current_user_id = payload.get("user_id")
+        current_user = db.query(User).filter_by(id=current_user_id).first()
+        if current_user.role != "admin":
             raise HTTPException(status_code=403, detail="Admin access only")
-
         users = db.query(User).all()
 
         all_users = []
         pending_users = []
 
         for user in users:
-            can_trade = True  # TODO: Join with UserPermission later
+            # ❌ Skip current admin
+            if user.id == current_user_id:
+                continue
+
+            perm = db.query(UserPermission).filter_by(user_id=user.id).first()
+            can_trade = True if not perm else perm.can_trade
+
             user_data = {
                 "id": user.id,
                 "username": user.username,
@@ -43,8 +60,9 @@ async def get_profiles(
                 "approval_status": user.approval_status,
                 "can_trade": can_trade
             }
+
             all_users.append(user_data)
-            
+
             if user.approval_status == "pending":
                 pending_users.append(user_data)
 
@@ -66,8 +84,10 @@ async def approve_user(
 ):
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Admin only")
+        current_user_id = payload.get("user_id")
+        current_user = db.query(User).filter_by(id=current_user_id).first()
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access only")
 
         user_id = data.get("user_id")
         decision = data.get("decision")   # "approve" or "decline"
@@ -102,8 +122,10 @@ def get_activity(hours: int = 24, db: Session = Depends(get_db), credentials: HT
     # 🔒 ADMIN ONLY
     # =========================
     payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-    if payload.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    current_user_id = payload.get("user_id")
+    current_user = db.query(User).filter_by(id=current_user_id).first()
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
 
     now_ts = int(time.time())
     cutoff_ts = now_ts - (hours * 3600)
@@ -244,6 +266,208 @@ async def heartbeat(
     db.commit()
 
     return {"status": "ok"}
+
+
+@router.post("/update-user")
+async def update_user(
+    data: dict,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("user_id")
+        current_user = db.query(User).filter_by(id=current_user_id).first()
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access only")
+        
+
+        user_id = data.get("user_id")
+        new_role = data.get("role")
+        can_trade = data.get("can_trade")
+        new_password = data.get("password")
+
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID required")
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # =========================
+        # 🔐 SAFETY: prevent self-demotion (optional but recommended)
+        # =========================
+        if user.id == payload.get("user_id") and new_role == "user":
+            raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
+
+        # =========================
+        # 🎭 UPDATE ROLE
+        # =========================
+        if new_role:
+            if new_role not in ["user", "admin"]:
+                raise HTTPException(status_code=400, detail="Invalid role")
+            user.role = new_role
+
+        # =========================
+        # 💼 UPDATE CAN_TRADE
+        # =========================
+        if can_trade is not None:
+            perm = db.query(UserPermission).filter_by(user_id=user_id).first()
+
+            if not perm:
+                perm = UserPermission(user_id=user_id)
+                db.add(perm)
+
+            perm.can_trade = bool(can_trade)
+
+        if new_password:
+            user.password_hash = hash_password(new_password)
+
+        db.commit()
+
+        return {"message": f"User {user.username} updated successfully"}
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@router.post("/reset-password")
+async def reset_password(
+    data: dict,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("user_id")
+        current_user = db.query(User).filter_by(id=current_user_id).first()
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access only")
+
+        user_id = data.get("user_id")
+        new_password = data.get("password")
+
+        if not user_id or not new_password:
+            raise HTTPException(status_code=400, detail="Missing fields")
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.password_hash = hash_password(new_password)
+
+        db.commit()
+
+        return {"message": f"Password updated for {user.username}"}
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+@router.delete("/delete-user/{user_id}")
+async def delete_user(
+    user_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    try:
+        # =========================
+        # AUTH CHECK
+        # =========================
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("user_id")
+        current_user = db.query(User).filter_by(id=current_user_id).first()
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access only")
+
+        current_admin_id = payload.get("user_id")
+
+        # Prevent self-delete
+        if user_id == current_admin_id:
+            raise HTTPException(status_code=400, detail="You cannot delete yourself")
+
+        # =========================
+        # GET USER
+        # =========================
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # =========================
+        # GET TRADING ACCOUNTS
+        # =========================
+        accounts = db.query(TradingAccount).filter(
+            TradingAccount.owner_user_id == user_id
+        ).all()
+
+        account_ids = [a.id for a in accounts]
+
+        # =========================
+        # METAAPI CLEANUP
+        # =========================
+        for acc in accounts:
+            if acc.metaapi_account_id:
+                try:
+                    await account_manager.undeploy(acc.metaapi_account_id)
+                    await account_manager.remove_account(acc.metaapi_account_id)
+                except Exception as e:
+                    print(f"[MetaAPI Delete Error] {acc.metaapi_account_id}: {e}")
+
+        # =========================
+        # COPY SYSTEM CLEANUP
+        # =========================
+        if account_ids:
+            db.query(CopyTradeLink).filter(
+                (CopyTradeLink.master_account_id.in_(account_ids)) |
+                (CopyTradeLink.slave_account_id.in_(account_ids))
+            ).delete(synchronize_session=False)
+
+            db.query(CopyRelationship).filter(
+                (CopyRelationship.master_account_id.in_(account_ids)) |
+                (CopyRelationship.slave_account_id.in_(account_ids))
+            ).delete(synchronize_session=False)
+
+            db.query(BotLog).filter(
+                BotLog.account_id.in_(account_ids)
+            ).delete(synchronize_session=False)
+
+        # =========================
+        # DELETE USER-RELATED TABLES
+        # =========================
+        db.query(TradingAccount).filter(
+            TradingAccount.owner_user_id == user_id
+        ).delete(synchronize_session=False)
+
+        db.query(UserPermission).filter(
+            UserPermission.user_id == user_id
+        ).delete(synchronize_session=False)
+
+        db.query(ActivityLog).filter(
+            ActivityLog.username == user.username
+        ).delete(synchronize_session=False)
+
+        db.query(ActiveUser).filter(
+            ActiveUser.username == user.username
+        ).delete(synchronize_session=False)
+
+        # =========================
+        # DELETE USER
+        # =========================
+        db.delete(user)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": f"User '{user.username}' and all related data deleted successfully"
+        }
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
 
 
 

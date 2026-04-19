@@ -41,9 +41,6 @@ async def startup_event():
 async def serve_login():
     return FileResponse("static/login.html")
 
-
-
-
 @app.get("/signup")
 async def serve_signup():
     return FileResponse("static/signup.html")

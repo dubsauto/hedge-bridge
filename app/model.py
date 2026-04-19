@@ -147,8 +147,10 @@ class CopyTradeSettings(Base):
     __tablename__ = "copy_trade_settings"
 
     id = Column(Integer, primary_key=True, default=1)
-
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     fixed_lot_enabled = Column(Boolean, default=False)
+    pips_offset_enabled = Column(Boolean, default=False)
+    pips_offset = Column(Integer, default=50)
     master_lot = Column(Float, default=0.10)
     slave_lot = Column(Float, default=0.10)
 
@@ -218,6 +220,44 @@ class BotLog(Base):
     raw_json = Column(JSON)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class SymbolMappingGroup(Base):
+    __tablename__ = "symbol_mapping_groups"
+
+    id = Column(Integer, primary_key=True)
+
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+
+    name = Column(String(100))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SymbolMappingEntry(Base):
+    __tablename__ = "symbol_mapping_entries"
+
+    id = Column(Integer, primary_key=True)
+
+    group_id = Column(Integer, ForeignKey("symbol_mapping_groups.id", ondelete="CASCADE"))
+    account_id = Column(Integer, ForeignKey("trading_accounts.id", ondelete="CASCADE"))
+
+    symbol = Column(String(32), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "account_id", name="uniq_group_account"),
+    )
+    
+class AccountLot(Base):
+    __tablename__ = "account_lots"
+
+    account_id = Column(
+        Integer,
+        ForeignKey("trading_accounts.id", ondelete="CASCADE"),
+        primary_key=True
+    )
+
+    lot_size = Column(Float, default=0.10)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # =========================
 # CREATE TABLES

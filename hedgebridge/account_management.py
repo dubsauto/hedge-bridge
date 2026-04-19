@@ -3,6 +3,7 @@
 from hedgebridge.api_client import get_metaapi_client
 from typing import Optional, Dict
 from metaapi_cloud_sdk import MetaApi
+import time
 
 
 class MT5AccountManager:
@@ -157,6 +158,24 @@ class MT5AccountManager:
 
         except Exception as e:
             return {"success": False, "message": str(e)}
+        
+    async def get_account_metrics(self, account_id: str):
+        account = await self._get_account(account_id)
+
+        connection = account.get_rpc_connection()
+
+        # ⏱️ Measure latency (round-trip)
+        start = time.perf_counter()
+        await connection.connect()
+        info = await connection.get_account_information()
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        return {
+            "balance": info.get("balance"),
+            "equity": info.get("equity"),
+            "latency_ms": round(latency_ms, 2)
+        }
 
 
 # Singleton
