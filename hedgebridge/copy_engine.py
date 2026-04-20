@@ -167,20 +167,22 @@ class CopyEngine:
                 final_tp = None
                 if master_entry:
                     if rel.copy_direction == "opposite":
-                        sl_distance = abs(master_entry - master_sl) if master_sl else None
-                        tp_distance = abs(master_entry - master_tp) if master_tp else None
+                        final_sl = master_tp
+                        final_tp = master_sl
+                        # sl_distance = abs(master_entry - master_sl) if master_sl else None
+                        # tp_distance = abs(master_entry - master_tp) if master_tp else None
 
-                        if final_type == "POSITION_TYPE_BUY":
-                            if sl_distance:
-                                final_sl = entry_price - sl_distance
-                            if tp_distance:
-                                final_tp = entry_price + tp_distance
+                        # if final_type == "POSITION_TYPE_BUY":
+                        #     if sl_distance:
+                        #         final_sl = entry_price - sl_distance
+                        #     if tp_distance:
+                        #         final_tp = entry_price + tp_distance
 
-                        else:  # SELL
-                            if sl_distance:
-                                final_sl = entry_price + sl_distance
-                            if tp_distance:
-                                final_tp = entry_price - tp_distance
+                        # else:  # SELL
+                        #     if sl_distance:
+                        #         final_sl = entry_price + sl_distance
+                        #     if tp_distance:
+                        #         final_tp = entry_price - tp_distance
                     else:
                         final_sl = master_sl
                         final_tp = master_tp
