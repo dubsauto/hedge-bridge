@@ -32,10 +32,12 @@ class HealthStatus(TypedDict, total=False):
 
 
 class MetaApiTradeListener(ABC):
-    def __init__(self, account_id: int):
+    def __init__(self, account_id: int, manager=None):
         self.account_id = account_id
         #self._initialized = False
         self._known_positions = set()
+        self.manager = manager
+        self._disconnected = False 
         # self._active = False 
 
     def get_region(self, instance_index: str = None) -> str:
@@ -96,8 +98,13 @@ class MetaApiTradeListener(ABC):
         Returns:
              A coroutine which resolves when the asynchronous event is processed.
         """
-        # self._active = False
-        pass
+        if self._disconnected:
+            return
+        self._disconnected = True
+        print(f"🔌 DISCONNECTED {self.account_id}")
+        if self.manager:
+            await self.manager.mark_disconnected(self.account_id)
+
 
     async def on_broker_connection_status_changed(self, instance_index: str, connected: bool):
         """Invoked when broker connection status have changed.
@@ -236,7 +243,24 @@ class MetaApiTradeListener(ABC):
         Returns:
             A coroutine which resolves when the asynchronous event is processed.
         """
-        pass
+        db = SessionLocal()
+
+        try:
+            ticket = str(position['id'])
+
+            print(f"✏️ MODIFY TRADE {self.account_id} → {ticket}")
+
+            await copy_engine.handle_modify_trade(
+                db=db,
+                account_id=self.account_id,
+                position=position
+            )
+
+        except Exception as e:
+            print(f"❌ position modify error: {e}")
+
+        finally:
+            db.close()
 
     async def on_position_removed(self, instance_index: str, position_id: str):
         """Invoked when MetaTrader position is removed.
@@ -549,8 +573,12 @@ class MetaApiTradeListener(ABC):
         Returns:
             A coroutine which resolves when the asynchronous event is processed.
         """
-        # self._active = False
-        pass
+        if self._disconnected:
+            return
+        self._disconnected = True
+        print(f"⚠️ STREAM CLOSED {self.account_id}")
+        if self.manager:
+            await self.manager.mark_disconnected(self.account_id)
 
     async def on_unsubscribe_region(self, region: str):
         """Invoked when account region has been unsubscribed.

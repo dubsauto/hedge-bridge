@@ -16,29 +16,68 @@ class MT5Trader:
         if self._api is None:
             self._api = get_metaapi_client()
         return self._api
-
+    
     async def _get_connection(self, account_id: str):
-        if account_id in self._connections:
-            return self._connections[account_id]
-
         api = await self._get_api()
         account = await api.metatrader_account_api.get_account(account_id)
 
-        # Only deploy if needed
-        if account.state != 'DEPLOYED':
-            print(f"Deploying account {account_id}...")
-            await account.deploy()
+        # Try existing connection first
+        connection = self._connections.get(account_id)
 
-        await account.wait_connected()
+        for attempt in range(3):
+            try:
+                # 🔥 If no connection OR disconnected → recreate
+                if connection is None or account.connection_status != "CONNECTED":
+                    print(f"[Reconnect] Account {account_id} (attempt {attempt+1})")
 
-        connection = account.get_rpc_connection()
-        await connection.connect()
-        await connection.wait_synchronized()
+                    # Force reconnect via deploy (safe even if already deployed)
+                    await account.deploy()
 
-        # ✅ CACHE IT
-        self._connections[account_id] = connection
+                    # Give time for MetaApi to reconnect
+                    await asyncio.sleep(2)
 
-        return connection
+                    connection = account.get_rpc_connection()
+
+                    await connection.connect()
+                    await connection.wait_synchronized()
+
+                    # Update cache
+                    self._connections[account_id] = connection
+
+                return connection
+
+            except Exception as e:
+                print(f"[Retry {attempt+1}] Connection failed: {e}")
+
+                # Reset connection so we recreate it next loop
+                connection = None
+                self._connections.pop(account_id, None)
+
+                await asyncio.sleep(2)
+
+        raise Exception(f"Failed to establish connection for {account_id}")
+    # async def _get_connection(self, account_id: str):
+    #     if account_id in self._connections:
+    #         return self._connections[account_id]
+
+    #     api = await self._get_api()
+    #     account = await api.metatrader_account_api.get_account(account_id)
+
+    #     # Only deploy if needed
+    #     if account.state != 'DEPLOYED':
+    #         print(f"Deploying account {account_id}...")
+    #         await account.deploy()
+
+    #     await account.wait_connected()
+
+    #     connection = account.get_rpc_connection()
+    #     await connection.connect()
+    #     await connection.wait_synchronized()
+
+    #     # ✅ CACHE IT
+    #     self._connections[account_id] = connection
+
+    #     return connection
 
     async def get_price(self, account_id: str, symbol: str) -> Dict[str, float]:
         """
@@ -48,15 +87,6 @@ class MT5Trader:
             connection = await self._get_connection(account_id)
 
             price = await connection.get_symbol_price(symbol)
-
-            # MetaApi returns:
-            # {
-            #   'symbol': 'EURUSD',
-            #   'bid': 1.12345,
-            #   'ask': 1.12357,
-            #   ...
-            # }
-
             if not price:
                 raise Exception("No price data returned")
 
