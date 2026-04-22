@@ -5,6 +5,7 @@ from app.model import CopyRelationship, CopyTradeLink, TradingAccount, CopyTrade
 from hedgebridge.trading import trader
 from app.services.logger import log
 from datetime import datetime
+import asyncio
 
 
 class CopyEngine:
@@ -57,7 +58,7 @@ class CopyEngine:
             self._processing.add(key)
 
             # =========================
-            # MASTER ACCOUNT
+            # STEP 1: DB READ ONLY
             # =========================
             master_acc = db.query(TradingAccount).filter(
                 TradingAccount.id == master_account_id
@@ -68,69 +69,53 @@ class CopyEngine:
 
             user_id = master_acc.owner_user_id
 
-            # =========================
-            # SETTINGS
-            # =========================
             settings = db.query(CopyTradeSettings).filter_by(user_id=user_id).first()
 
             fixed_lot_enabled = settings.fixed_lot_enabled if settings else False
             pips_offset_enabled = settings.pips_offset_enabled if settings else False
             pips_offset = settings.pips_offset if settings else 0
 
-            # =========================
-            # LOT MAP
-            # =========================
             account_lots_map = {
                 row.account_id: row.lot_size
                 for row in db.query(AccountLot).all()
             } if fixed_lot_enabled else {}
 
-            # =========================
-            # LOG MASTER
-            # =========================
-            log(
-                db=db,
-                account_id=master_account_id,
-                level="TRADE",
-                category="COPY",
-                message=f"Master opened {symbol} {trade_type} {volume}",
-                raw_json=position
-            )
-
-            # =========================
-            # FIND SLAVES
-            # =========================
             relationships = db.query(CopyRelationship).filter(
                 CopyRelationship.master_account_id == master_account_id,
                 CopyRelationship.slave_account_id.isnot(None),
                 CopyRelationship.is_active == True
             ).all()
 
-            # 🔥 TRACK EXECUTION STATE
+            slave_accounts = {
+                acc.id: acc
+                for acc in db.query(TradingAccount).filter(
+                    TradingAccount.id.in_([r.slave_account_id for r in relationships])
+                ).all()
+            }
+
+            # 🔥 CLOSE DB EARLY
+            db.close()
+
+            # =========================
+            # STEP 2: ASYNC EXECUTION
+            # =========================
             opened_links = []
             failed = False
 
             for rel in relationships:
                 slave_id = rel.slave_account_id
-
-                slave_acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == slave_id
-                ).first()
+                slave_acc = slave_accounts.get(slave_id)
 
                 if not slave_acc:
                     continue
 
-                # =========================
                 # LOT
-                # =========================
                 final_volume = (
                     account_lots_map.get(slave_id, volume)
                     if fixed_lot_enabled else volume
                 )
 
-                # =========================
                 # DIRECTION
-                # =========================
                 final_type = trade_type
                 if rel.copy_direction == "opposite":
                     final_type = (
@@ -139,181 +124,114 @@ class CopyEngine:
                         else "POSITION_TYPE_BUY"
                     )
 
-                # =========================
                 # SL/TP
-                # =========================
-                final_sl = None
-                final_tp = None
-                if master_entry:
-                    if rel.copy_direction == "opposite":
-                        final_sl = master_tp
-                        final_tp = master_sl
-                    else:
-                        final_sl = master_sl
-                        final_tp = master_tp
+                final_sl = master_sl
+                final_tp = master_tp
 
-                # =========================
+                if master_entry and rel.copy_direction == "opposite":
+                    final_sl, final_tp = master_tp, master_sl
+
                 # OFFSET
-                # =========================
                 if pips_offset_enabled and pips_offset > 0:
                     try:
-                        offset_value = await self.pips_to_price(
-                            slave_acc.metaapi_account_id,
-                            symbol,
-                            pips_offset
+                        offset_value = await asyncio.wait_for(
+                            self.pips_to_price(
+                                slave_acc.metaapi_account_id,
+                                symbol,
+                                pips_offset
+                            ),
+                            timeout=5
                         )
 
                         if final_type == "POSITION_TYPE_BUY":
-                            if final_sl is not None:
-                                final_sl -= offset_value
-                            if final_tp is not None:
-                                final_tp += offset_value
+                            if final_sl: final_sl -= offset_value
+                            if final_tp: final_tp += offset_value
                         else:
-                            if final_sl is not None:
-                                final_sl += offset_value
-                            if final_tp is not None:
-                                final_tp -= offset_value
+                            if final_sl: final_sl += offset_value
+                            if final_tp: final_tp -= offset_value
 
-                    except Exception as offset_err:
-                        log(
-                            db=db,
-                            account_id=slave_id,
-                            level="ERROR",
-                            category="OFFSET",
-                            message=f"Offset error: {str(offset_err)}"
-                        )
+                    except Exception:
+                        pass
 
-                # =========================
-                # LOG COPY START
-                # =========================
-                log(
-                    db=db,
-                    account_id=slave_id,
-                    level="INFO",
-                    category="COPY",
-                    message=f"Copying {symbol} {final_type} from master {master_ticket}"
-                )
-
-                # =========================
                 # EXECUTE
-                # =========================
                 try:
                     if final_type == "POSITION_TYPE_BUY":
-                        result = await trader.buy(
-                            slave_acc.metaapi_account_id,
-                            symbol,
-                            final_volume,
-                            final_sl,
-                            final_tp,
-                            comment=f"copy:{master_ticket}",
-                            magic=slave_acc.magic
+                        result = await asyncio.wait_for(
+                            trader.buy(
+                                slave_acc.metaapi_account_id,
+                                symbol,
+                                final_volume,
+                                final_sl,
+                                final_tp,
+                                comment=f"copy:{master_ticket}",
+                                magic=slave_acc.magic
+                            ),
+                            timeout=15
                         )
                     else:
-                        result = await trader.sell(
-                            slave_acc.metaapi_account_id,
-                            symbol,
-                            final_volume,
-                            final_sl,
-                            final_tp,
-                            comment=f"copy:{master_ticket}",
-                            magic=slave_acc.magic
+                        result = await asyncio.wait_for(
+                            trader.sell(
+                                slave_acc.metaapi_account_id,
+                                symbol,
+                                final_volume,
+                                final_sl,
+                                final_tp,
+                                comment=f"copy:{master_ticket}",
+                                magic=slave_acc.magic
+                            ),
+                            timeout=15
                         )
 
-                except Exception as exec_error:
-                    log(
-                        db=db,
-                        account_id=slave_id,
-                        level="ERROR",
-                        category="EXECUTION",
-                        message=f"Execution error: {str(exec_error)}"
-                    )
+                except Exception:
                     failed = True
                     break
 
                 # =========================
-                # RESULT
+                # STEP 3: DB WRITE (NEW SESSION)
                 # =========================
-                if result.get("success"):
-                    slave_ticket = str(result["result"]["orderId"])
+                from app.database import SessionLocal
+                write_db = SessionLocal()
 
-                    link = CopyTradeLink(
-                        master_account_id=master_account_id,
-                        slave_account_id=slave_id,
-                        master_ticket=master_ticket,
-                        slave_ticket=slave_ticket,
-                        symbol=symbol,
-                        trade_type=final_type.lower(),
-                        volume=final_volume,
-                        status="open"
-                    )
+                try:
+                    if result.get("success"):
+                        slave_ticket = str(result["result"]["orderId"])
 
-                    db.add(link)
-                    db.commit()
+                        link = CopyTradeLink(
+                            master_account_id=master_account_id,
+                            slave_account_id=slave_id,
+                            master_ticket=master_ticket,
+                            slave_ticket=slave_ticket,
+                            symbol=symbol,
+                            trade_type=final_type.lower(),
+                            volume=final_volume,
+                            status="open"
+                        )
 
-                    opened_links.append((slave_acc, slave_ticket))
+                        write_db.add(link)
+                        write_db.commit()
 
-                    log(
-                        db=db,
-                        account_id=slave_id,
-                        level="TRADE",
-                        category="COPY",
-                        message=f"Copied {symbol} → ticket {slave_ticket}",
-                        raw_json=result.get("result")
-                    )
+                        opened_links.append((slave_acc, slave_ticket))
+                    else:
+                        failed = True
+                        break
 
-                else:
-                    log(
-                        db=db,
-                        account_id=slave_id,
-                        level="ERROR",
-                        category="COPY",
-                        message=f"Copy failed: {result.get('error')}",
-                        raw_json=result
-                    )
-                    failed = True
-                    break
+                finally:
+                    write_db.close()
 
             # =========================
-            # 🔥 SAFETY CHECK
+            # STEP 4: SAFETY CLOSE
             # =========================
             if failed:
-                log(
-                    db=db,
-                    account_id=master_account_id,
-                    level="ERROR",
-                    category="SAFETY",
-                    message="Execution failed → closing master & all slaves"
-                )
-
-                # CLOSE MASTER
                 try:
-                    await trader.close_position(
-                        master_acc.metaapi_account_id,
-                        master_ticket
-                    )
+                    await trader.close_position(master_acc.metaapi_account_id, master_ticket)
                 except:
                     pass
 
-                # CLOSE SUCCESSFUL SLAVES
                 for acc, ticket in opened_links:
                     try:
-                        await trader.close_position(
-                            acc.metaapi_account_id,
-                            ticket
-                        )
+                        await trader.close_position(acc.metaapi_account_id, ticket)
                     except:
                         pass
-
-                return
-
-        except Exception as e:
-            log(
-                db=db,
-                account_id=master_account_id,
-                level="ERROR",
-                category="SYSTEM",
-                message=f"handle_new_trade error: {str(e)}"
-            )
 
         finally:
             if key:
@@ -322,8 +240,8 @@ class CopyEngine:
     async def handle_close_trade(
         self,
         db: Session,
-        account_id: int,          # 🔥 whoever triggered the close
-        closed_ticket: str        # 🔥 ticket that was closed
+        account_id: int,
+        closed_ticket: str
     ):
         key = f"close:{account_id}:{closed_ticket}"
 
@@ -333,7 +251,7 @@ class CopyEngine:
             self._processing.add(key)
 
             # =========================
-            # FIND LINK (MASTER OR SLAVE)
+            # STEP 1: DB READ ONLY
             # =========================
             link = db.query(CopyTradeLink).filter(
                 (
@@ -351,109 +269,131 @@ class CopyEngine:
                 return
 
             master_ticket = link.master_ticket
+            master_account_id = link.master_account_id
 
-            # =========================
-            # GET FULL GROUP
-            # =========================
             group_links = db.query(CopyTradeLink).filter(
                 CopyTradeLink.master_ticket == master_ticket,
                 CopyTradeLink.status == "open"
             ).all()
 
-            # =========================
-            # CLOSE MASTER (IF SLAVE TRIGGERED)
-            # =========================
-            if account_id != link.master_account_id:
-                master_acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == link.master_account_id
-                ).first()
+            master_acc = db.query(TradingAccount).filter(
+                TradingAccount.id == master_account_id
+            ).first()
 
-                if master_acc:
-                    try:
-                        await trader.close_position(
-                            master_acc.metaapi_account_id,
-                            link.master_ticket
-                        )
+            slave_accounts = {
+                acc.id: acc
+                for acc in db.query(TradingAccount).filter(
+                    TradingAccount.id.in_([l.slave_account_id for l in group_links])
+                ).all()
+            }
 
-                        log(
-                            db=db,
-                            account_id=master_acc.id,
-                            level="TRADE",
-                            category="COPY",
-                            message=f"Closed MASTER trade {link.master_ticket} (triggered by slave)"
-                        )
-
-                    except Exception as e:
-                        log(
-                            db=db,
-                            account_id=master_acc.id,
-                            level="ERROR",
-                            category="COPY",
-                            message=f"Failed closing MASTER: {str(e)}"
-                        )
+            # 🔥 CLOSE DB EARLY
+            db.close()
 
             # =========================
-            # CLOSE ALL SLAVES
+            # STEP 2: CLOSE TRADES (ASYNC)
             # =========================
+            tasks = []
+
+            # --- close master if triggered by slave ---
+            if account_id != master_account_id and master_acc:
+                tasks.append((
+                    "master",
+                    master_acc.metaapi_account_id,
+                    master_ticket,
+                    master_account_id
+                ))
+
+            # --- close slaves ---
             for l in group_links:
-
-                # skip the one already closed
                 if (
                     l.slave_account_id == account_id and
                     l.slave_ticket == closed_ticket
                 ):
                     continue
 
-                slave_acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == l.slave_account_id
-                ).first()
-
-                if not slave_acc:
+                acc = slave_accounts.get(l.slave_account_id)
+                if not acc:
                     continue
 
-                try:
-                    await trader.close_position(
-                        slave_acc.metaapi_account_id,
-                        l.slave_ticket
-                    )
+                tasks.append((
+                    "slave",
+                    acc.metaapi_account_id,
+                    l.slave_ticket,
+                    l.slave_account_id
+                ))
 
-                    log(
-                        db=db,
-                        account_id=l.slave_account_id,
-                        level="TRADE",
-                        category="COPY",
-                        message=f"Closed slave trade {l.slave_ticket}"
-                    )
+            # =========================
+            # STEP 3: EXECUTE CLOSES
+            # =========================
+            for role, metaapi_id, ticket, acc_id in tasks:
+                try:
+                    await trader.close_position(metaapi_id, ticket)
+
+                    # log safely (new DB session)
+                    from app.database import SessionLocal
+                    log_db = SessionLocal()
+
+                    try:
+                        log(
+                            db=log_db,
+                            account_id=acc_id,
+                            level="TRADE",
+                            category="COPY",
+                            message=f"Closed {role.upper()} trade {ticket}"
+                        )
+                    finally:
+                        log_db.close()
 
                 except Exception as e:
-                    log(
-                        db=db,
-                        account_id=l.slave_account_id,
-                        level="ERROR",
-                        category="COPY",
-                        message=f"Failed closing slave {l.slave_ticket}: {str(e)}"
-                    )
+                    from app.database import SessionLocal
+                    log_db = SessionLocal()
+
+                    try:
+                        log(
+                            db=log_db,
+                            account_id=acc_id,
+                            level="ERROR",
+                            category="COPY",
+                            message=f"Failed closing {role} {ticket}: {str(e)}"
+                        )
+                    finally:
+                        log_db.close()
 
             # =========================
-            # MARK ALL CLOSED
+            # STEP 4: UPDATE STATUS (NEW DB SESSION)
             # =========================
-            for l in group_links:
-                l.status = "closed"
-                l.closed_at = datetime.utcnow()
+            from app.database import SessionLocal
+            write_db = SessionLocal()
 
-            db.commit()
+            try:
+                for l in group_links:
+                    l.status = "closed"
+                    l.closed_at = datetime.utcnow()
+
+                write_db.commit()
+
+            finally:
+                write_db.close()
 
         except Exception as e:
-            log(
-                db=db,
-                account_id=account_id,
-                level="ERROR",
-                category="SYSTEM",
-                message=f"handle_close_trade error: {str(e)}"
-            )
+            from app.database import SessionLocal
+            log_db = SessionLocal()
+
+            try:
+                log(
+                    db=log_db,
+                    account_id=account_id,
+                    level="ERROR",
+                    category="SYSTEM",
+                    message=f"handle_close_trade error: {str(e)}"
+                )
+            finally:
+                log_db.close()
 
         finally:
             self._processing.discard(key)
+
 
     async def handle_modify_trade(
         self,
@@ -471,7 +411,7 @@ class CopyEngine:
             self._processing.add(key)
 
             # =========================
-            # FIND LINK
+            # STEP 1: DB READ ONLY
             # =========================
             link = db.query(CopyTradeLink).filter(
                 (
@@ -489,37 +429,53 @@ class CopyEngine:
                 return
 
             master_ticket = link.master_ticket
+            origin_is_master = account_id == link.master_account_id
 
-            # =========================
-            # GET FULL GROUP
-            # =========================
             group_links = db.query(CopyTradeLink).filter(
                 CopyTradeLink.master_ticket == master_ticket,
                 CopyTradeLink.status == "open"
             ).all()
 
-            origin_is_master = account_id == link.master_account_id
+            # preload accounts
+            account_ids = set()
+            for l in group_links:
+                if l.slave_account_id:
+                    account_ids.add(l.slave_account_id)
+            account_ids.add(link.master_account_id)
+
+            accounts = {
+                acc.id: acc
+                for acc in db.query(TradingAccount).filter(
+                    TradingAccount.id.in_(account_ids)
+                ).all()
+            }
+
+            # preload relationships
+            relationships = {
+                (r.master_account_id, r.slave_account_id): r
+                for r in db.query(CopyRelationship).filter(
+                    CopyRelationship.master_account_id == link.master_account_id
+                ).all()
+            }
+
+            # 🔥 CLOSE DB EARLY
+            db.close()
 
             # =========================
-            # IF SLAVE → MODIFY MASTER (WITH CORRECT MAPPING)
+            # STEP 2: MODIFY MASTER (if triggered by slave)
             # =========================
             if not origin_is_master:
-                master_acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == link.master_account_id
-                ).first()
+                master_acc = accounts.get(link.master_account_id)
 
                 if master_acc:
                     try:
-                        # 🔥 get relationship for this slave
-                        rel = db.query(CopyRelationship).filter(
-                            CopyRelationship.master_account_id == link.master_account_id,
-                            CopyRelationship.slave_account_id == link.slave_account_id
-                        ).first()
+                        rel = relationships.get(
+                            (link.master_account_id, link.slave_account_id)
+                        )
 
                         master_sl = new_sl
                         master_tp = new_tp
 
-                        # 🔁 FIX: reverse mapping if opposite
                         if rel and rel.copy_direction == "opposite":
                             master_sl = new_tp
                             master_tp = new_sl
@@ -532,47 +488,39 @@ class CopyEngine:
                         )
 
                     except Exception as e:
-                        log(
-                            db=db,
-                            account_id=master_acc.id,
-                            level="ERROR",
-                            category="MODIFY",
-                            message=f"Master modify failed: {str(e)}"
-                        )
+                        from app.database import SessionLocal
+                        log_db = SessionLocal()
+                        try:
+                            log(
+                                db=log_db,
+                                account_id=master_acc.id,
+                                level="ERROR",
+                                category="MODIFY",
+                                message=f"Master modify failed: {str(e)}"
+                            )
+                        finally:
+                            log_db.close()
 
             # =========================
-            # MODIFY ALL SLAVES
+            # STEP 3: MODIFY SLAVES
             # =========================
             for l in group_links:
 
-                # =========================
-                # SKIP ORIGIN (MASTER OR SLAVE)
-                # =========================
-                if origin_is_master:
-                    # skip master-triggered origin (we don't modify master here anyway)
-                    pass
-                else:
-                    # skip the slave that triggered
+                # skip origin slave
+                if not origin_is_master:
                     if (
                         l.slave_account_id == account_id and
                         l.slave_ticket == ticket
                     ):
                         continue
 
-                slave_acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == l.slave_account_id
-                ).first()
-
+                slave_acc = accounts.get(l.slave_account_id)
                 if not slave_acc:
                     continue
 
-                # =========================
-                # RELATIONSHIP
-                # =========================
-                rel = db.query(CopyRelationship).filter(
-                    CopyRelationship.master_account_id == l.master_account_id,
-                    CopyRelationship.slave_account_id == l.slave_account_id
-                ).first()
+                rel = relationships.get(
+                    (l.master_account_id, l.slave_account_id)
+                )
 
                 if not rel:
                     continue
@@ -580,7 +528,6 @@ class CopyEngine:
                 final_sl = new_sl
                 final_tp = new_tp
 
-                # 🔁 OPPOSITE LOGIC
                 if rel.copy_direction == "opposite":
                     final_sl = new_tp
                     final_tp = new_sl
@@ -593,963 +540,49 @@ class CopyEngine:
                         final_tp
                     )
 
-                    log(
-                        db=db,
-                        account_id=l.slave_account_id,
-                        level="TRADE",
-                        category="MODIFY",
-                        message=f"Modified SL/TP for {l.slave_ticket}"
-                    )
+                    from app.database import SessionLocal
+                    log_db = SessionLocal()
+                    try:
+                        log(
+                            db=log_db,
+                            account_id=l.slave_account_id,
+                            level="TRADE",
+                            category="MODIFY",
+                            message=f"Modified SL/TP for {l.slave_ticket}"
+                        )
+                    finally:
+                        log_db.close()
 
                 except Exception as e:
-                    log(
-                        db=db,
-                        account_id=l.slave_account_id,
-                        level="ERROR",
-                        category="MODIFY",
-                        message=f"Modify failed: {str(e)}"
-                    )
+                    from app.database import SessionLocal
+                    log_db = SessionLocal()
+                    try:
+                        log(
+                            db=log_db,
+                            account_id=l.slave_account_id,
+                            level="ERROR",
+                            category="MODIFY",
+                            message=f"Modify failed: {str(e)}"
+                        )
+                    finally:
+                        log_db.close()
 
         except Exception as e:
-            log(
-                db=db,
-                account_id=account_id,
-                level="ERROR",
-                category="SYSTEM",
-                message=f"handle_modify_trade error: {str(e)}"
-            )
+            from app.database import SessionLocal
+            log_db = SessionLocal()
+            try:
+                log(
+                    db=log_db,
+                    account_id=account_id,
+                    level="ERROR",
+                    category="SYSTEM",
+                    message=f"handle_modify_trade error: {str(e)}"
+                )
+            finally:
+                log_db.close()
 
         finally:
             self._processing.discard(key)
-        
-        # async def handle_modify_trade(self, db: Session, account_id: int, position: dict):
-        #     key = f"modify:{account_id}:{position.get('id')}"
-
-        #     try:
-        #         print(f"\n🟡 [MODIFY START] account_id={account_id}, position={position}")
-
-        #         if key in self._processing:
-        #             print(f"⛔ Already processing key={key}, skipping")
-        #             return
-
-        #         self._processing.add(key)
-
-        #         ticket = str(position.get("id"))
-        #         new_sl = position.get("stopLoss")
-        #         new_tp = position.get("takeProfit")
-
-        #         print(f"📌 Parsed values → ticket={ticket}, SL={new_sl}, TP={new_tp}")
-
-        #         # =========================
-        #         # FIND LINK (BIDIRECTIONAL SAFE)
-        #         # =========================
-        #         print(f"🔎 Searching CopyTradeLink for account_id={account_id}, ticket={ticket}")
-
-        #         link = db.query(CopyTradeLink).filter(
-        #             (
-        #                 (CopyTradeLink.master_account_id == account_id) &
-        #                 (CopyTradeLink.master_ticket == ticket)
-        #             ) |
-        #             (
-        #                 (CopyTradeLink.slave_account_id == account_id) &
-        #                 (CopyTradeLink.slave_ticket == ticket)
-        #             ),
-        #             CopyTradeLink.status == "open"
-        #         ).first()
-
-        #         print(f"🔗 Link found: {link}")
-
-        #         if not link:
-        #             print("⚠️ No matching link found → exiting modify handler")
-        #             return
-
-        #         master_ticket = link.master_ticket
-        #         print(f"🎯 Master ticket resolved: {master_ticket}")
-
-        #         # =========================
-        #         # GET FULL GROUP (BIDIRECTIONAL SAFE)
-        #         # =========================
-        #         group_links = db.query(CopyTradeLink).filter(
-        #             (
-        #                 (CopyTradeLink.master_ticket == master_ticket) |
-        #                 (CopyTradeLink.slave_ticket == master_ticket)
-        #             ),
-        #             CopyTradeLink.status == "open"
-        #         ).all()
-
-        #         print(f"👥 Group size: {len(group_links)} links")
-
-        #         # =========================
-        #         # LOOP THROUGH GROUP
-        #         # =========================
-        #         for i, l in enumerate(group_links):
-        #             print(f"\n➡️ Processing group link #{i}: {l}")
-
-        #             # skip triggering trade (important)
-        #             if (
-        #                 (l.master_account_id == account_id and l.master_ticket == ticket) or
-        #                 (l.slave_account_id == account_id and l.slave_ticket == ticket)
-        #             ):
-        #                 print("⏭️ Skipping triggering trade")
-        #                 continue
-
-        #             # =========================
-        #             # DETERMINE TARGET SIDE (BIDIRECTIONAL SIMPLE)
-        #             # =========================
-        #             if l.master_account_id == account_id:
-        #                 target_account = l.slave_account_id
-        #                 target_ticket = l.slave_ticket
-        #                 print("👑 Trigger from MASTER → updating SLAVE")
-        #             elif l.slave_account_id == account_id:
-        #                 target_account = l.master_account_id
-        #                 target_ticket = l.master_ticket
-        #                 print("👤 Trigger from SLAVE → updating MASTER")
-        #             else:
-        #                 # safety fallback (shouldn't happen)
-        #                 print("⚠️ Unknown relation → skipping row")
-        #                 continue
-
-        #             print(f"🎯 Target → account={target_account}, ticket={target_ticket}")
-
-        #             acc = db.query(TradingAccount).filter(
-        #                 TradingAccount.id == target_account
-        #             ).first()
-
-        #             print(f"🏦 Target account found: {acc}")
-
-        #             if not acc:
-        #                 print("⚠️ No TradingAccount found → skipping")
-        #                 continue
-
-        #             final_sl = new_sl
-        #             final_tp = new_tp
-
-        #             print(f"🧮 Initial SL/TP → SL={final_sl}, TP={final_tp}")
-
-        #             # =========================
-        #             # APPLY MODIFY (NO DIRECTION FLIPPING)
-        #             # =========================
-        #             print(f"🚀 Sending modify request → ticket={target_ticket}")
-
-        #             try:
-        #                 await trader.modify_position(
-        #                     acc.metaapi_account_id,
-        #                     target_ticket,
-        #                     final_sl,
-        #                     final_tp
-        #                 )
-
-        #                 print(f"✅ Modified position {target_ticket} for account {target_account}")
-
-        #                 log(
-        #                     db=db,
-        #                     account_id=target_account,
-        #                     level="TRADE",
-        #                     category="MODIFY",
-        #                     message=f"Synced SL/TP for {target_ticket}"
-        #                 )
-
-        #             except Exception as e:
-        #                 print(f"❌ Modify FAILED → account={target_account}, ticket={target_ticket}, error={e}")
-
-        #                 log(
-        #                     db=db,
-        #                     account_id=target_account,
-        #                     level="ERROR",
-        #                     category="MODIFY",
-        #                     message=f"Modify failed: {str(e)}"
-        #                 )
-
-        #     finally:
-        #         self._processing.discard(key)
-        #         print(f"🧹 Cleanup done for key={key}")
-
-
 
 # Singleton
 copy_engine = CopyEngine()
-
-
-
-
-
-
-# # =========================
-# # GET SLAVE PRICE
-# # =========================
-# try:
-#     price_data = await trader.get_price(
-#         slave_acc.metaapi_account_id,
-#         symbol
-#     )
-
-#     entry_price = (
-#         price_data["ask"]
-#         if final_type == "POSITION_TYPE_BUY"
-#         else price_data["bid"]
-#     )
-
-# except Exception as price_err:
-#     log(
-#         db=db,
-#         account_id=slave_id,
-#         level="ERROR",
-#         category="PRICE",
-#         message=f"Price fetch failed: {str(price_err)}"
-#     )
-#     continue
-
-# # =========================
-# # CLOSE TRADE (MASTER)
-# # =========================
-# async def handle_close_trade(self, db: Session, master_account_id: int, master_ticket: str):
-#     try:
-#         key = f"close_master:{master_ticket}"
-#         if key in self._processing:
-#             return
-#         self._processing.add(key)
-
-#         log(db=db,
-#             account_id=master_account_id,
-#             level="TRADE",
-#             category="COPY",
-#             message=f"Master closing trade {master_ticket}")
-
-#         links = db.query(CopyTradeLink).filter(
-#             CopyTradeLink.master_ticket == master_ticket,
-#             CopyTradeLink.status == "open"
-#         ).all()
-
-#         for link in links:
-#             slave_acc = db.query(TradingAccount).filter(
-#                 TradingAccount.id == link.slave_account_id
-#             ).first()
-
-#             if not slave_acc:
-#                 continue
-
-#             try:
-#                 await trader.close_position(
-#                     slave_acc.metaapi_account_id,
-#                     link.slave_ticket
-#                 )
-
-#                 # log(db, link.slave_account_id, "TRADE",
-#                 #     f"Closed copied trade {link.slave_ticket}",
-#                 #     category="COPY")
-                
-#                 log(db=db,
-#                     account_id=link.slave_account_id,
-#                     level="TRADE",
-#                     category="COPY",
-#                     message=f"Closed copied trade {link.slave_ticket}")
-
-#             except Exception as e:
-#                 # log(db, link.slave_account_id, "ERROR",
-#                 #     f"Failed closing slave trade {link.slave_ticket}: {str(e)}",
-#                 #     category="COPY")
-#                 log(db=db,
-#                     account_id=link.slave_account_id,
-#                     level="ERROR",
-#                     category="COPY",
-#                     message=f"Failed closing slave trade {link.slave_ticket}: {str(e)}")
-
-#             link.status = "closed"
-
-#         db.commit()
-
-#     except Exception as e:
-#         # log(db, master_account_id, "ERROR",
-#         #     f"handle_close_trade error: {str(e)}",
-#         #     category="SYSTEM")
-#         log(db=db,
-#             account_id=master_account_id,
-#             level="ERROR",
-#             category="SYSTEM",
-#             message=f"handle_close_trade error: {str(e)}")
-#     finally:
-#         self._processing.discard(key)
-
-
-# =========================
-# CLOSE TRADE (SLAVE)
-# =========================
-# async def handle_slave_close(self, db: Session, slave_ticket: str):
-#     try:
-#         key = f"close_slave:{slave_ticket}"
-#         if key in self._processing:
-#             return
-#         self._processing.add(key)
-
-#         link = db.query(CopyTradeLink).filter(
-#             CopyTradeLink.slave_ticket == slave_ticket,
-#             CopyTradeLink.status == "open"
-#         ).first()
-
-#         if not link:
-#             return
-
-#         # log(db, link.slave_account_id, "WARNING",
-#         #     f"Slave manually closed → cascading close",
-#         #     category="RISK")
-#         log(db=db,
-#             account_id=link.slave_account_id,
-#             level="WARNING",
-#             category="RISK",
-#             message=f"Slave manually closed → cascading close")
-
-#         master_acc = db.query(TradingAccount).filter(
-#             TradingAccount.id == link.master_account_id
-#         ).first()
-
-#         try:
-#             await trader.close_position(
-#                 master_acc.metaapi_account_id,
-#                 link.master_ticket
-#             )
-#         except Exception as e:
-#             # log(db, link.master_account_id, "ERROR",
-#             #     f"Failed closing master: {str(e)}",
-#             #     category="RISK")
-#             log(db=db,
-#                 account_id=link.master_account_id,
-#                 level="ERROR",
-#                 category="RISK",
-#                 message=f"Failed closing master: {str(e)}")
-
-#         all_links = db.query(CopyTradeLink).filter(
-#             CopyTradeLink.master_ticket == link.master_ticket,
-#             CopyTradeLink.status == "open"
-#         ).all()
-
-#         for l in all_links:
-#             slave_acc = db.query(TradingAccount).filter(
-#                 TradingAccount.id == l.slave_account_id
-#             ).first()
-
-#             try:
-#                 await trader.close_position(
-#                     slave_acc.metaapi_account_id,
-#                     l.slave_ticket
-#                 )
-#             except:
-#                 pass
-
-#             l.status = "closed"
-
-#         db.commit()
-
-#     except Exception as e:
-#         log(db=db,
-#             account_id=link.slave_account_id,
-#             level="ERROR",
-#             category="SYSTEM",
-#             message=f"handle_slave_close error: {str(e)}")
-#     finally:
-#         self._processing.discard(key)
-
-
-
-
-# sl_distance = abs(master_entry - master_sl) if master_sl else None
-# tp_distance = abs(master_entry - master_tp) if master_tp else None
-
-# if final_type == "POSITION_TYPE_BUY":
-#     if sl_distance:
-#         final_sl = entry_price - sl_distance
-#     if tp_distance:
-#         final_tp = entry_price + tp_distance
-
-# else:  # SELL
-#     if sl_distance:
-#         final_sl = entry_price + sl_distance
-#     if tp_distance:
-#         final_tp = entry_price - tp_distance
-
-
-
-
-# async def handle_new_trade(self, db: Session, master_account_id: int, position: dict):
-#     try:
-#         master_ticket = str(position.get("id") or position.get("ticket"))
-#         symbol = position.get("symbol")
-#         volume = position.get("volume")
-#         trade_type = position.get("type")
-#         sl = position.get("stopLoss")
-#         tp = position.get("takeProfit")
-
-#         key = f"open:{master_ticket}"
-#         if key in self._processing:
-#             return
-#         self._processing.add(key)
-
-#         # log(db, master_account_id, "TRADE",
-#         #     f"Master opened {symbol} {trade_type} {volume}",
-#         #     category="COPY",
-#         #     raw_json=position)
-#         log(db=db,
-#             account_id=master_account_id,
-#             level="TRADE",
-#             category="COPY",
-#             message=f"Master opened {symbol} {trade_type} {volume}",
-#             raw_json=position)
-
-#         # =========================
-#         # FIND SLAVES
-#         # =========================
-#         relationships = db.query(CopyRelationship).filter(
-#             CopyRelationship.master_account_id == master_account_id,
-#             CopyRelationship.slave_account_id.isnot(None),
-#             CopyRelationship.is_active == True
-#         ).all()
-
-#         settings = db.query(CopyTradeSettings).first()
-#         fixed_lot_enabled = settings.fixed_lot_enabled if settings else False
-
-#         for rel in relationships:
-#             slave_id = rel.slave_account_id
-
-#             slave_acc = db.query(TradingAccount).filter(
-#                 TradingAccount.id == slave_id
-#             ).first()
-
-#             if not slave_acc:
-#                 continue
-
-#             if fixed_lot_enabled:
-#                 lot_row = db.query(AccountLot).filter_by(account_id=slave_id).first()
-                
-#                 if lot_row:
-#                     final_volume = lot_row.lot_size
-#                 else:
-#                     final_volume = volume  # fallback
-#             else:
-#                 final_volume = volume
-
-#             # log(db, slave_id, "INFO",
-#             #     f"Copying trade {symbol} from master {master_ticket}",
-#             #     category="COPY")
-#             log(db=db,
-#                 account_id=slave_id,
-#                 level="INFO",
-#                 category="COPY",
-#                 message=f"Copying trade {symbol} from master {master_ticket}")
-
-#             # =========================
-#             # DIRECTION
-#             # =========================
-#             final_type = trade_type
-#             if rel.copy_direction == "opposite":
-#                 final_type = "POSITION_TYPE_SELL" if trade_type == "POSITION_TYPE_BUY" else "POSITION_TYPE_BUY"
-
-#             # =========================
-#             # EXECUTE
-#             # =========================
-#             if final_type == "POSITION_TYPE_BUY":
-#                 result = await trader.buy(
-#                     slave_acc.metaapi_account_id,
-#                     symbol,
-#                     final_volume,
-#                     sl,
-#                     tp,
-#                     comment=f"copy:{master_ticket}",
-#                     magic=slave_acc.magic
-#                 )
-#             else:
-#                 result = await trader.sell(
-#                     slave_acc.metaapi_account_id,
-#                     symbol,
-#                     volume,
-#                     sl,
-#                     tp,
-#                     comment=f"copy:{master_ticket}",
-#                     magic=slave_acc.magic
-#                 )
-
-#             # =========================
-#             # RESULT
-#             # =========================
-#             if result.get("success"):
-#                 slave_ticket = str(result["result"]["orderId"])
-
-#                 link = CopyTradeLink(
-#                     master_account_id=master_account_id,
-#                     slave_account_id=slave_id,
-#                     master_ticket=master_ticket,
-#                     slave_ticket=slave_ticket,
-#                     symbol=symbol,
-#                     trade_type=final_type.lower(),
-#                     volume=volume,
-#                     status="open"
-#                 )
-#                 db.add(link)
-#                 db.commit()
-
-#                 # log(db, slave_id, "TRADE",
-#                 #     f"Copied trade {symbol} → ticket {slave_ticket}",
-#                 #     category="COPY",
-#                 #     raw_json=result.get("result"))
-#                 log(db=db,
-#                     account_id=slave_id,
-#                     level="TRADE",
-#                     category="COPY",
-#                     message=f"Copied trade {symbol} → ticket {slave_ticket}",
-#                     raw_json=result.get("result"))
-
-#             else:
-#                 # log(db, slave_id, "ERROR",
-#                 #     f"Copy failed: {result.get('error')}",
-#                 #     category="COPY")
-#                 log(db=db,
-#                     account_id=slave_id,
-#                     level="ERROR",
-#                     category="COPY",
-#                     message=f"Copy failed: {result.get('error')}",
-#                     raw_json=result)
-
-#     except Exception as e:
-#         # log(db, master_account_id, "ERROR",
-#         #     f"handle_new_trade error: {str(e)}",
-#         #     category="SYSTEM")
-#         log(db=db,
-#             account_id=master_account_id,
-#             level="ERROR",
-#             category="SYSTEM",
-#             message=f"handle_new_trade error: {str(e)}")
-#     finally:
-#         self._processing.discard(key)
-
-
-
-
-    # =========================
-# NEW TRADE (MASTER)
-# =========================
-# async def handle_new_trade(self, db: Session, master_account_id: int, position: dict):
-#     key = None
-#     try:
-#         master_ticket = str(position.get("id") or position.get("ticket"))
-#         symbol = position.get("symbol")
-#         volume = position.get("volume")
-#         trade_type = position.get("type")
-#         sl = position.get("stopLoss")
-#         tp = position.get("takeProfit")
-
-#         key = f"open:{master_ticket}"
-#         if key in self._processing:
-#             return
-#         self._processing.add(key)
-
-#         # =========================
-#         # GET MASTER ACCOUNT + USER
-#         # =========================
-#         master_acc = db.query(TradingAccount).filter(
-#             TradingAccount.id == master_account_id
-#         ).first()
-
-#         if not master_acc:
-#             return
-
-#         user_id = master_acc.owner_user_id
-
-#         # =========================
-#         # SETTINGS (PER USER)
-#         # =========================
-#         settings = db.query(CopyTradeSettings).filter_by(user_id=user_id).first()
-#         fixed_lot_enabled = settings.fixed_lot_enabled if settings else False
-
-#         # =========================
-#         # PRELOAD ACCOUNT LOTS (OPTIMIZED)
-#         # =========================
-#         account_lots_map = {
-#             row.account_id: row.lot_size
-#             for row in db.query(AccountLot).all()
-#         } if fixed_lot_enabled else {}
-
-#         # =========================
-#         # LOG MASTER TRADE
-#         # =========================
-#         log(
-#             db=db,
-#             account_id=master_account_id,
-#             level="TRADE",
-#             category="COPY",
-#             message=f"Master opened {symbol} {trade_type} {volume}",
-#             raw_json=position
-#         )
-
-#         # =========================
-#         # FIND SLAVES
-#         # =========================
-#         relationships = db.query(CopyRelationship).filter(
-#             CopyRelationship.master_account_id == master_account_id,
-#             CopyRelationship.slave_account_id.isnot(None),
-#             CopyRelationship.is_active == True
-#         ).all()
-
-#         for rel in relationships:
-#             slave_id = rel.slave_account_id
-
-#             slave_acc = db.query(TradingAccount).filter(
-#                 TradingAccount.id == slave_id
-#             ).first()
-
-#             if not slave_acc:
-#                 continue
-
-#             # =========================
-#             # LOT LOGIC
-#             # =========================
-#             if fixed_lot_enabled:
-#                 final_volume = account_lots_map.get(slave_id, volume)
-#             else:
-#                 final_volume = volume
-
-#             # =========================
-#             # LOG COPY START
-#             # =========================
-#             log(
-#                 db=db,
-#                 account_id=slave_id,
-#                 level="INFO",
-#                 category="COPY",
-#                 message=f"Copying trade {symbol} from master {master_ticket}"
-#             )
-
-#             # =========================
-#             # DIRECTION
-#             # =========================
-#             final_type = trade_type
-#             if rel.copy_direction == "opposite":
-#                 final_type = (
-#                     "POSITION_TYPE_SELL"
-#                     if trade_type == "POSITION_TYPE_BUY"
-#                     else "POSITION_TYPE_BUY"
-#                 )
-
-#             # =========================
-#             # EXECUTE TRADE
-#             # =========================
-#             try:
-#                 if final_type == "POSITION_TYPE_BUY":
-#                     result = await trader.buy(
-#                         slave_acc.metaapi_account_id,
-#                         symbol,
-#                         final_volume,
-#                         sl,
-#                         tp,
-#                         comment=f"copy:{master_ticket}",
-#                         magic=slave_acc.magic
-#                     )
-#                 else:
-#                     result = await trader.sell(
-#                         slave_acc.metaapi_account_id,
-#                         symbol,
-#                         final_volume,  # ✅ FIXED
-#                         sl,
-#                         tp,
-#                         comment=f"copy:{master_ticket}",
-#                         magic=slave_acc.magic
-#                     )
-
-#             except Exception as exec_error:
-#                 log(
-#                     db=db,
-#                     account_id=slave_id,
-#                     level="ERROR",
-#                     category="EXECUTION",
-#                     message=f"Execution error: {str(exec_error)}"
-#                 )
-#                 continue
-
-#             # =========================
-#             # RESULT HANDLING
-#             # =========================
-#             if result.get("success"):
-#                 slave_ticket = str(result["result"]["orderId"])
-
-#                 link = CopyTradeLink(
-#                     master_account_id=master_account_id,
-#                     slave_account_id=slave_id,
-#                     master_ticket=master_ticket,
-#                     slave_ticket=slave_ticket,
-#                     symbol=symbol,
-#                     trade_type=final_type.lower(),
-#                     volume=final_volume,  # ✅ store actual used volume
-#                     status="open"
-#                 )
-#                 db.add(link)
-#                 db.commit()
-
-#                 log(
-#                     db=db,
-#                     account_id=slave_id,
-#                     level="TRADE",
-#                     category="COPY",
-#                     message=f"Copied trade {symbol} → ticket {slave_ticket}",
-#                     raw_json=result.get("result")
-#                 )
-
-#             else:
-#                 log(
-#                     db=db,
-#                     account_id=slave_id,
-#                     level="ERROR",
-#                     category="COPY",
-#                     message=f"Copy failed: {result.get('error')}",
-#                     raw_json=result
-#                 )
-
-#     except Exception as e:
-#         log(
-#             db=db,
-#             account_id=master_account_id,
-#             level="ERROR",
-#             category="SYSTEM",
-#             message=f"handle_new_trade error: {str(e)}"
-#         )
-#     finally:
-#         if key:
-#             self._processing.discard(key)
-
-
-
-    # async def handle_new_trade(self, db: Session, master_account_id: int, position: dict):
-    #     key = None
-
-    #     try:
-    #         master_ticket = str(position.get("id") or position.get("ticket"))
-    #         symbol = position.get("symbol")
-    #         volume = position.get("volume")
-    #         trade_type = position.get("type")
-
-    #         master_sl = position.get("stopLoss")
-    #         master_tp = position.get("takeProfit")
-    #         master_entry = position.get("price") or position.get("openPrice")
-
-    #         key = f"open:{master_ticket}"
-    #         if key in self._processing:
-    #             return
-    #         self._processing.add(key)
-
-    #         # =========================
-    #         # MASTER ACCOUNT
-    #         # =========================
-    #         master_acc = db.query(TradingAccount).filter(
-    #             TradingAccount.id == master_account_id
-    #         ).first()
-
-    #         if not master_acc:
-    #             return
-
-    #         user_id = master_acc.owner_user_id
-
-    #         # =========================
-    #         # SETTINGS
-    #         # =========================
-    #         settings = db.query(CopyTradeSettings).filter_by(user_id=user_id).first()
-
-    #         fixed_lot_enabled = settings.fixed_lot_enabled if settings else False
-    #         pips_offset_enabled = settings.pips_offset_enabled if settings else False
-    #         pips_offset = settings.pips_offset if settings else 0
-
-    #         # =========================
-    #         # LOT MAP
-    #         # =========================
-    #         account_lots_map = {
-    #             row.account_id: row.lot_size
-    #             for row in db.query(AccountLot).all()
-    #         } if fixed_lot_enabled else {}
-
-    #         # =========================
-    #         # LOG MASTER
-    #         # =========================
-    #         log(
-    #             db=db,
-    #             account_id=master_account_id,
-    #             level="TRADE",
-    #             category="COPY",
-    #             message=f"Master opened {symbol} {trade_type} {volume}",
-    #             raw_json=position
-    #         )
-
-    #         # =========================
-    #         # FIND SLAVES
-    #         # =========================
-    #         relationships = db.query(CopyRelationship).filter(
-    #             CopyRelationship.master_account_id == master_account_id,
-    #             CopyRelationship.slave_account_id.isnot(None),
-    #             CopyRelationship.is_active == True
-    #         ).all()
-
-    #         for rel in relationships:
-    #             slave_id = rel.slave_account_id
-
-    #             slave_acc = db.query(TradingAccount).filter(
-    #                 TradingAccount.id == slave_id
-    #             ).first()
-
-    #             if not slave_acc:
-    #                 continue
-
-    #             # =========================
-    #             # LOT
-    #             # =========================
-    #             final_volume = (
-    #                 account_lots_map.get(slave_id, volume)
-    #                 if fixed_lot_enabled else volume
-    #             )
-
-    #             # =========================
-    #             # DIRECTION
-    #             # =========================
-    #             final_type = trade_type
-    #             if rel.copy_direction == "opposite":
-    #                 final_type = (
-    #                     "POSITION_TYPE_SELL"
-    #                     if trade_type == "POSITION_TYPE_BUY"
-    #                     else "POSITION_TYPE_BUY"
-    #                 )
-
-    #             # =========================
-    #             # DISTANCE-BASED SL/TP
-    #             # =========================
-    #             final_sl = None
-    #             final_tp = None
-    #             if master_entry:
-    #                 if rel.copy_direction == "opposite":
-    #                     final_sl = master_tp
-    #                     final_tp = master_sl
-    #                 else:
-    #                     final_sl = master_sl
-    #                     final_tp = master_tp
-
-    #             # =========================
-    #             # OFFSET (AFTER SL/TP FIX)
-    #             # =========================
-    #             if pips_offset_enabled and pips_offset > 0:
-    #                 try:
-    #                     offset_value = await self.pips_to_price(
-    #                         slave_acc.metaapi_account_id,
-    #                         symbol,
-    #                         pips_offset
-    #                     )
-
-    #                     if final_type == "POSITION_TYPE_BUY":
-    #                         if final_sl is not None:
-    #                             final_sl -= offset_value
-    #                         if final_tp is not None:
-    #                             final_tp += offset_value
-    #                     else:
-    #                         if final_sl is not None:
-    #                             final_sl += offset_value
-    #                         if final_tp is not None:
-    #                             final_tp -= offset_value
-
-    #                 except Exception as offset_err:
-    #                     log(
-    #                         db=db,
-    #                         account_id=slave_id,
-    #                         level="ERROR",
-    #                         category="OFFSET",
-    #                         message=f"Offset error: {str(offset_err)}"
-    #                     )
-
-    #             # =========================
-    #             # LOG COPY START
-    #             # =========================
-    #             log(
-    #                 db=db,
-    #                 account_id=slave_id,
-    #                 level="INFO",
-    #                 category="COPY",
-    #                 message=f"Copying {symbol} {final_type} from master {master_ticket}"
-    #             )
-
-    #             # =========================
-    #             # EXECUTE
-    #             # =========================
-    #             try:
-    #                 if final_type == "POSITION_TYPE_BUY":
-    #                     result = await trader.buy(
-    #                         slave_acc.metaapi_account_id,
-    #                         symbol,
-    #                         final_volume,
-    #                         final_sl,
-    #                         final_tp,
-    #                         comment=f"copy:{master_ticket}",
-    #                         magic=slave_acc.magic
-    #                     )
-    #                 else:
-    #                     result = await trader.sell(
-    #                         slave_acc.metaapi_account_id,
-    #                         symbol,
-    #                         final_volume,
-    #                         final_sl,
-    #                         final_tp,
-    #                         comment=f"copy:{master_ticket}",
-    #                         magic=slave_acc.magic
-    #                     )
-
-    #             except Exception as exec_error:
-    #                 log(
-    #                     db=db,
-    #                     account_id=slave_id,
-    #                     level="ERROR",
-    #                     category="EXECUTION",
-    #                     message=f"Execution error: {str(exec_error)}"
-    #                 )
-    #                 continue
-
-    #             # =========================
-    #             # RESULT
-    #             # =========================
-    #             if result.get("success"):
-    #                 slave_ticket = str(result["result"]["orderId"])
-
-    #                 link = CopyTradeLink(
-    #                     master_account_id=master_account_id,
-    #                     slave_account_id=slave_id,
-    #                     master_ticket=master_ticket,
-    #                     slave_ticket=slave_ticket,
-    #                     symbol=symbol,
-    #                     trade_type=final_type.lower(),
-    #                     volume=final_volume,
-    #                     status="open"
-    #                 )
-
-    #                 db.add(link)
-    #                 db.commit()
-
-    #                 log(
-    #                     db=db,
-    #                     account_id=slave_id,
-    #                     level="TRADE",
-    #                     category="COPY",
-    #                     message=f"Copied {symbol} → ticket {slave_ticket}",
-    #                     raw_json=result.get("result")
-    #                 )
-
-    #             else:
-    #                 log(
-    #                     db=db,
-    #                     account_id=slave_id,
-    #                     level="ERROR",
-    #                     category="COPY",
-    #                     message=f"Copy failed: {result.get('error')}",
-    #                     raw_json=result
-    #                 )
-
-    #     except Exception as e:
-    #         log(
-    #             db=db,
-    #             account_id=master_account_id,
-    #             level="ERROR",
-    #             category="SYSTEM",
-    #             message=f"handle_new_trade error: {str(e)}"
-    #         )
-
-    #     finally:
-    #         if key:
-    #             self._processing.discard(key)
-    

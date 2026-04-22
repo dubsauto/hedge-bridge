@@ -17,42 +17,41 @@ router = APIRouter(prefix="/mt5", tags=["MT5 Accounts"])
 
 
 
+
 @router.get("/accounts")
 async def get_mt5_accounts(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     try:
-        #print("starting getting accounts")
+        # =========================
+        # STEP 1: AUTH
+        # =========================
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("user_id")
 
-        # Get all user accounts
+        # =========================
+        # STEP 2: DB WORK ONLY
+        # =========================
         accounts = db.query(TradingAccount).filter(
             TradingAccount.owner_user_id == user_id
         ).all()
 
-        account_list = []
+        account_data = []
 
         for acc in accounts:
 
-            # MASTER → count slaves
             slave_count = db.query(CopyRelationship).filter(
                 CopyRelationship.master_account_id == acc.id
             ).count()
-            role = "none"
 
-            if slave_count > 0:
-                role = "master"
+            role = "master" if slave_count > 0 else "none"
+            slave_count = slave_count - 1 if slave_count > 0 else 0
 
-            slave_count = slave_count-1 if slave_count > 0 else 0 #exclude self if master
-
-            # SLAVE → get relationship
             as_slave_rel = db.query(CopyRelationship).filter(
                 CopyRelationship.slave_account_id == acc.id
             ).first()
 
-            
             master_account_id = None
             master_name = None
             copy_direction = "same"
@@ -64,7 +63,6 @@ async def get_mt5_accounts(
                 copy_direction = as_slave_rel.copy_direction
                 strict_mode = as_slave_rel.strict_mode
 
-                # 🔥 GET MASTER NAME
                 master = db.query(TradingAccount).filter(
                     TradingAccount.id == master_account_id
                 ).first()
@@ -72,43 +70,82 @@ async def get_mt5_accounts(
                 if master:
                     master_name = master.name
 
-
-            deployed = (
-                    acc.state.lower() == "deployed"
-                    and acc.connection_status.lower() == "connected"
-                )
-            account_metrics = {}
-
-            if deployed and acc.metaapi_account_id:
-                account_metrics = await account_manager.get_account_metrics(acc.metaapi_account_id) if acc.metaapi_account_id else {}
-
-            account_list.append({
+            account_data.append({
                 "id": acc.id,
                 "name": acc.name,
                 "login": acc.login,
                 "server": acc.server,
                 "state": acc.state,
                 "online": acc.connection_status == "connected",
+                "metaapi_account_id": acc.metaapi_account_id,
 
                 "copy_role": role,
                 "master_account_id": master_account_id,
-                "master_name": master_name,        # 🔥 NEW
-                "slave_count": slave_count,        # 🔥 NEW
+                "master_name": master_name,
+                "slave_count": slave_count,
                 "copy_direction": copy_direction,
-                "strict_mode": strict_mode,
-                "balance": account_metrics.get("balance", " N/A"),
-                "equity": account_metrics.get("equity", " N/A"),
-                "latency_ms": account_metrics.get("latency_ms", " N/A")
+                "strict_mode": strict_mode
             })
-            #print("ending accounts")
+
+        # =========================
+        # STEP 3: CLOSE DB EARLY
+        # =========================
+        db.close()
+
+        # =========================
+        # STEP 4: ASYNC WORK
+        # =========================
+        import asyncio
+
+        tasks = []
+        for acc in account_data:
+            deployed = (
+                acc["state"].lower() == "deployed"
+                and acc["online"]
+                and acc["metaapi_account_id"]
+            )
+
+            if deployed:
+                tasks.append(
+                    asyncio.wait_for(
+                        account_manager.get_account_metrics(acc["metaapi_account_id"]),
+                        timeout=10
+                    )
+                )
+            else:
+                tasks.append(None)
+
+        results = await asyncio.gather(*[
+            t if t else asyncio.sleep(0, result={})
+            for t in tasks
+        ], return_exceptions=True)
+
+        # =========================
+        # STEP 5: BUILD RESPONSE
+        # =========================
+        account_list = []
+
+        for acc, metrics in zip(account_data, results):
+            if isinstance(metrics, Exception) or metrics is None:
+                metrics = {}
+
+            account_list.append({
+                **acc,
+                "balance": metrics.get("balance", "N/A"),
+                "equity": metrics.get("equity", "N/A"),
+                "latency_ms": metrics.get("latency_ms", "N/A"),
+            })
+
         return {"accounts": account_list}
 
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
     except Exception as e:
         print(f"Error fetching accounts: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
-    
+
+
 # =========================
 # DEPLOY MT5 ACCOUNT
 # =========================
@@ -1325,28 +1362,55 @@ async def get_positions(
 ):
     user_id = payload.get("user_id")
 
-    account = db.query(TradingAccount).filter(
-        TradingAccount.id == account_id,
-        TradingAccount.owner_user_id == user_id
-    ).first()
-
-    if not account:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
     try:
+        # =========================
+        # STEP 1: DB ONLY
+        # =========================
+        account = db.query(TradingAccount).filter(
+            TradingAccount.id == account_id,
+            TradingAccount.owner_user_id == user_id
+        ).first()
+
+        if not account:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+
         deployed = account.state.lower() == "deployed"
-        if deployed:
-            connection = await trader._get_connection(account.metaapi_account_id)
-            positions = await connection.get_positions()
-        else:
-            positions = []
+        metaapi_account_id = account.metaapi_account_id
+
+        # 🔥 CLOSE DB EARLY
+        db.close()
+
+        # =========================
+        # STEP 2: EXTERNAL CALLS
+        # =========================
+        if not deployed or not metaapi_account_id:
+            return {"success": True, "positions": []}
+
+        import asyncio
+
+        # Add timeout to prevent hanging forever
+        connection = await asyncio.wait_for(
+            trader._get_connection(metaapi_account_id),
+            timeout=10
+        )
+
+        positions = await asyncio.wait_for(
+            connection.get_positions(),
+            timeout=15
+        )
+
         return {"success": True, "positions": positions}
+
+    except asyncio.TimeoutError:
+        # 🔥 critical: handle timeout cleanly
+        return {
+            "success": False,
+            "positions": [],
+            "error": "Request timed out"
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
 
         # for acc in accounts:
         #     # Determine role from CopyRelationship

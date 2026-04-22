@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 from app.schemas import AccountLotSchema
 from app.database import get_db
-from app.model import User, UserPermission, TradingAccount, SymbolMappingEntry, SymbolMappingGroup, AccountLot, CopyTradeSettings
+from app.model import User, UserPermission, SymbolMappingEntry, SymbolMappingGroup, AccountLot, CopyTradeSettings
 from app.auth import SECRET_KEY, ALGORITHM, security 
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
