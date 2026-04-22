@@ -1,13 +1,10 @@
 # app/server.py
 import asyncio
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
-
 from app.init_db import init_database
-
 # Import routers
 from app.api.metaconnect_routes import router as metaconnect_router
 from app.api.auth_routes import router as auth_router

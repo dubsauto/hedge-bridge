@@ -73,7 +73,10 @@ async def get_mt5_accounts(
                     master_name = master.name
 
 
-            deployed = acc.state.lower() == "deployed"
+            deployed = (
+                    acc.state.lower() == "deployed"
+                    and acc.connection_status.lower() == "connected"
+                )
             account_metrics = {}
 
             if deployed and acc.metaapi_account_id:

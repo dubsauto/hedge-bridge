@@ -161,21 +161,39 @@ class MT5AccountManager:
             return {"success": False, "message": str(e)}
 
     async def get_account_metrics(self, account_id: str):
+        print(f"Fetching metrics for account {account_id}")
         account = await self._get_account(account_id)
 
         for attempt in range(3):
             try:
-                # 🔥 Reconnect only if disconnected
-                if account.connection_status != "CONNECTED":
-                    print(f"[Reconnect] Account {account_id} (attempt {attempt+1})")
+                print(f"account.state: {account.state}")
+                print(f"account.connection_status: {account.connection_status}")
+
+                # ✅ Ensure deployed
+                if account.state != "DEPLOYED":
+                    print(f"[Deploy] Account {account_id}")
                     await account.deploy()
-                    await asyncio.sleep(2)  # allow reconnect
+
+                # ✅ Wait for connection
+                if account.connection_status != "CONNECTED":
+                    print(f"[Waiting for connection] Account {account_id} (attempt {attempt+1})")
+
+                    for _ in range(15):
+                        await account.reload()
+
+                        if account.connection_status == "CONNECTED":
+                            print(f"[Connected] Account {account_id}")
+                            break
+
+                        await asyncio.sleep(1)
+                    else:
+                        raise Exception("Connection timeout")
 
                 connection = account.get_rpc_connection()
 
                 start = time.perf_counter()
 
-                # ⏱️ Add timeout protection
+                # ✅ Always safe to call connect (MetaApi handles internally)
                 await asyncio.wait_for(connection.connect(), timeout=10)
 
                 info = await asyncio.wait_for(
@@ -184,18 +202,64 @@ class MT5AccountManager:
                 )
 
                 latency_ms = (time.perf_counter() - start) * 1000
-
+                #await connection.close()
                 return {
                     "balance": info.get("balance"),
                     "equity": info.get("equity"),
                     "latency_ms": round(latency_ms, 2)
                 }
 
+            except asyncio.CancelledError:
+                print(f"[Cancelled] Connection interrupted for {account_id}")
+                return {}
+
             except Exception as e:
                 print(f"[Retry {attempt+1}] Metrics failed: {e}")
                 await asyncio.sleep(2)
 
-        raise Exception(f"Failed to fetch account metrics for {account_id}")
+        print(f"[FAILED] Could not fetch metrics for {account_id}")
+        return {}
+    
+    
+    # async def get_account_metrics(self, account_id: str):
+    #     account = await self._get_account(account_id)
+
+    #     for attempt in range(3):
+    #         try:
+    #             # 🔥 Reconnect only if disconnected
+    #             print(f"account.connection_status: {account.connection_status}")
+    #             if account.connection_status != "CONNECTED":
+    #                 print(f"[Reconnect] Account {account_id} (attempt {attempt+1})")
+    #                 for _ in range(10):
+    #                     await account.reload()
+    #                     if account.connection_status == "CONNECTED":
+    #                         break
+    #                     await asyncio.sleep(1)
+    #             connection = account.get_rpc_connection()
+
+    #             start = time.perf_counter()
+
+    #             # ⏱️ Add timeout protection
+    #             await asyncio.wait_for(connection.connect(), timeout=10)
+
+    #             info = await asyncio.wait_for(
+    #                 connection.get_account_information(),
+    #                 timeout=10
+    #             )
+
+    #             latency_ms = (time.perf_counter() - start) * 1000
+
+    #             return {
+    #                 "balance": info.get("balance"),
+    #                 "equity": info.get("equity"),
+    #                 "latency_ms": round(latency_ms, 2)
+    #             }
+
+    #         except Exception as e:
+    #             print(f"[Retry {attempt+1}] Metrics failed: {e}")
+    #             await asyncio.sleep(2)
+
+    #     raise Exception(f"Failed to fetch account metrics for {account_id}")
         
     # async def get_account_metrics(self, account_id: str):
     #     account = await self._get_account(account_id)

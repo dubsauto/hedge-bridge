@@ -36,19 +36,22 @@ class ListenerManager:
 
         try:
             accounts = db.query(TradingAccount).all()
+            #print(f"📦 Accounts in DB: {len(accounts)}")
 
             for acc in accounts:
+                #print(f"🔎 Account: id={acc.id}, state={acc.state}, metaapi={acc.metaapi_account_id}")
 
-                # Only deployed accounts
-                if acc.state != "deployed":
+                if not acc.state or acc.state.upper() != "DEPLOYED":
+                    #print(f"⏩ Skipping non-deployed account {acc.id}")
                     await self._remove_listener(acc)
                     continue
 
-                # Must be part of copy trading
                 is_used = db.query(CopyRelationship).filter(
                     (CopyRelationship.master_account_id == acc.id) |
                     (CopyRelationship.slave_account_id == acc.id)
                 ).first()
+
+                #print(f"🔗 Copy relationship exists: {bool(is_used)}")
 
                 if not is_used:
                     await self._remove_listener(acc)

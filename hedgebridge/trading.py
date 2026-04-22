@@ -56,6 +56,8 @@ class MT5Trader:
                 await asyncio.sleep(2)
 
         raise Exception(f"Failed to establish connection for {account_id}")
+    
+    
     # async def _get_connection(self, account_id: str):
     #     if account_id in self._connections:
     #         return self._connections[account_id]
@@ -176,9 +178,9 @@ class MT5Trader:
     async def modify_position(self, account_id: str, position_id: str, sl: Optional[float] = None, tp: Optional[float] = None):
         try:
             connection = await self._get_connection(account_id)
-
+            print(f"Modifying position {position_id} for account {account_id}")
             result = await connection.modify_position(position_id, stop_loss=sl, take_profit=tp)
-
+            print(f"Modify result: {result}")
             return {"success": True, "result": result}
 
         except Exception as e:

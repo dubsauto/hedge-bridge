@@ -455,17 +455,20 @@ class CopyEngine:
         finally:
             self._processing.discard(key)
 
-    async def handle_modify_trade(self, db: Session, account_id: int, position: dict):
-        key = f"modify:{account_id}:{position.get('id')}"
+    async def handle_modify_trade(
+        self,
+        db: Session,
+        account_id: int,
+        ticket: str,
+        new_sl: float,
+        new_tp: float
+    ):
+        key = f"modify:{account_id}:{ticket}"
 
         try:
             if key in self._processing:
                 return
             self._processing.add(key)
-
-            ticket = str(position.get("id"))
-            new_sl = position.get("stopLoss")
-            new_tp = position.get("takeProfit")
 
             # =========================
             # FIND LINK
@@ -488,89 +491,280 @@ class CopyEngine:
             master_ticket = link.master_ticket
 
             # =========================
-            # GET ALL RELATED TRADES
+            # GET FULL GROUP
             # =========================
             group_links = db.query(CopyTradeLink).filter(
                 CopyTradeLink.master_ticket == master_ticket,
                 CopyTradeLink.status == "open"
             ).all()
 
+            origin_is_master = account_id == link.master_account_id
+
             # =========================
-            # LOOP THROUGH GROUP
+            # IF SLAVE → MODIFY MASTER (WITH CORRECT MAPPING)
+            # =========================
+            if not origin_is_master:
+                master_acc = db.query(TradingAccount).filter(
+                    TradingAccount.id == link.master_account_id
+                ).first()
+
+                if master_acc:
+                    try:
+                        # 🔥 get relationship for this slave
+                        rel = db.query(CopyRelationship).filter(
+                            CopyRelationship.master_account_id == link.master_account_id,
+                            CopyRelationship.slave_account_id == link.slave_account_id
+                        ).first()
+
+                        master_sl = new_sl
+                        master_tp = new_tp
+
+                        # 🔁 FIX: reverse mapping if opposite
+                        if rel and rel.copy_direction == "opposite":
+                            master_sl = new_tp
+                            master_tp = new_sl
+
+                        await trader.modify_position(
+                            master_acc.metaapi_account_id,
+                            link.master_ticket,
+                            master_sl,
+                            master_tp
+                        )
+
+                    except Exception as e:
+                        log(
+                            db=db,
+                            account_id=master_acc.id,
+                            level="ERROR",
+                            category="MODIFY",
+                            message=f"Master modify failed: {str(e)}"
+                        )
+
+            # =========================
+            # MODIFY ALL SLAVES
             # =========================
             for l in group_links:
 
-                # skip the one that triggered update
-                if (
-                    (l.master_account_id == account_id and l.master_ticket == ticket) or
-                    (l.slave_account_id == account_id and l.slave_ticket == ticket)
-                ):
-                    continue
-
-                # determine target account + ticket
-                if l.master_account_id == account_id:
-                    # master changed → update slaves
-                    target_account = l.slave_account_id
-                    target_ticket = l.slave_ticket
-                    direction = l.trade_type
+                # =========================
+                # SKIP ORIGIN (MASTER OR SLAVE)
+                # =========================
+                if origin_is_master:
+                    # skip master-triggered origin (we don't modify master here anyway)
+                    pass
                 else:
-                    # slave changed → update master + other slaves
-                    target_account = (
-                        l.master_account_id if l.master_ticket != ticket else l.slave_account_id
-                    )
-                    target_ticket = (
-                        l.master_ticket if l.master_ticket != ticket else l.slave_ticket
-                    )
-                    direction = l.trade_type
+                    # skip the slave that triggered
+                    if (
+                        l.slave_account_id == account_id and
+                        l.slave_ticket == ticket
+                    ):
+                        continue
 
-                acc = db.query(TradingAccount).filter(
-                    TradingAccount.id == target_account
+                slave_acc = db.query(TradingAccount).filter(
+                    TradingAccount.id == l.slave_account_id
                 ).first()
 
-                if not acc:
+                if not slave_acc:
+                    continue
+
+                # =========================
+                # RELATIONSHIP
+                # =========================
+                rel = db.query(CopyRelationship).filter(
+                    CopyRelationship.master_account_id == l.master_account_id,
+                    CopyRelationship.slave_account_id == l.slave_account_id
+                ).first()
+
+                if not rel:
                     continue
 
                 final_sl = new_sl
                 final_tp = new_tp
 
-                # =========================
-                # HANDLE OPPOSITE DIRECTION
-                # =========================
-                if direction == "position_type_sell" or direction == "position_type_buy":
-                    # same direction → keep as is
-                    pass
-                else:
-                    # opposite direction
-                    final_sl, final_tp = new_tp, new_sl
+                # 🔁 OPPOSITE LOGIC
+                if rel.copy_direction == "opposite":
+                    final_sl = new_tp
+                    final_tp = new_sl
 
                 try:
                     await trader.modify_position(
-                        acc.metaapi_account_id,
-                        target_ticket,
+                        slave_acc.metaapi_account_id,
+                        l.slave_ticket,
                         final_sl,
                         final_tp
                     )
 
                     log(
                         db=db,
-                        account_id=target_account,
+                        account_id=l.slave_account_id,
                         level="TRADE",
                         category="MODIFY",
-                        message=f"Synced SL/TP for {target_ticket}"
+                        message=f"Modified SL/TP for {l.slave_ticket}"
                     )
 
                 except Exception as e:
                     log(
                         db=db,
-                        account_id=target_account,
+                        account_id=l.slave_account_id,
                         level="ERROR",
                         category="MODIFY",
                         message=f"Modify failed: {str(e)}"
                     )
 
+        except Exception as e:
+            log(
+                db=db,
+                account_id=account_id,
+                level="ERROR",
+                category="SYSTEM",
+                message=f"handle_modify_trade error: {str(e)}"
+            )
+
         finally:
             self._processing.discard(key)
-            
+        
+        # async def handle_modify_trade(self, db: Session, account_id: int, position: dict):
+        #     key = f"modify:{account_id}:{position.get('id')}"
+
+        #     try:
+        #         print(f"\n🟡 [MODIFY START] account_id={account_id}, position={position}")
+
+        #         if key in self._processing:
+        #             print(f"⛔ Already processing key={key}, skipping")
+        #             return
+
+        #         self._processing.add(key)
+
+        #         ticket = str(position.get("id"))
+        #         new_sl = position.get("stopLoss")
+        #         new_tp = position.get("takeProfit")
+
+        #         print(f"📌 Parsed values → ticket={ticket}, SL={new_sl}, TP={new_tp}")
+
+        #         # =========================
+        #         # FIND LINK (BIDIRECTIONAL SAFE)
+        #         # =========================
+        #         print(f"🔎 Searching CopyTradeLink for account_id={account_id}, ticket={ticket}")
+
+        #         link = db.query(CopyTradeLink).filter(
+        #             (
+        #                 (CopyTradeLink.master_account_id == account_id) &
+        #                 (CopyTradeLink.master_ticket == ticket)
+        #             ) |
+        #             (
+        #                 (CopyTradeLink.slave_account_id == account_id) &
+        #                 (CopyTradeLink.slave_ticket == ticket)
+        #             ),
+        #             CopyTradeLink.status == "open"
+        #         ).first()
+
+        #         print(f"🔗 Link found: {link}")
+
+        #         if not link:
+        #             print("⚠️ No matching link found → exiting modify handler")
+        #             return
+
+        #         master_ticket = link.master_ticket
+        #         print(f"🎯 Master ticket resolved: {master_ticket}")
+
+        #         # =========================
+        #         # GET FULL GROUP (BIDIRECTIONAL SAFE)
+        #         # =========================
+        #         group_links = db.query(CopyTradeLink).filter(
+        #             (
+        #                 (CopyTradeLink.master_ticket == master_ticket) |
+        #                 (CopyTradeLink.slave_ticket == master_ticket)
+        #             ),
+        #             CopyTradeLink.status == "open"
+        #         ).all()
+
+        #         print(f"👥 Group size: {len(group_links)} links")
+
+        #         # =========================
+        #         # LOOP THROUGH GROUP
+        #         # =========================
+        #         for i, l in enumerate(group_links):
+        #             print(f"\n➡️ Processing group link #{i}: {l}")
+
+        #             # skip triggering trade (important)
+        #             if (
+        #                 (l.master_account_id == account_id and l.master_ticket == ticket) or
+        #                 (l.slave_account_id == account_id and l.slave_ticket == ticket)
+        #             ):
+        #                 print("⏭️ Skipping triggering trade")
+        #                 continue
+
+        #             # =========================
+        #             # DETERMINE TARGET SIDE (BIDIRECTIONAL SIMPLE)
+        #             # =========================
+        #             if l.master_account_id == account_id:
+        #                 target_account = l.slave_account_id
+        #                 target_ticket = l.slave_ticket
+        #                 print("👑 Trigger from MASTER → updating SLAVE")
+        #             elif l.slave_account_id == account_id:
+        #                 target_account = l.master_account_id
+        #                 target_ticket = l.master_ticket
+        #                 print("👤 Trigger from SLAVE → updating MASTER")
+        #             else:
+        #                 # safety fallback (shouldn't happen)
+        #                 print("⚠️ Unknown relation → skipping row")
+        #                 continue
+
+        #             print(f"🎯 Target → account={target_account}, ticket={target_ticket}")
+
+        #             acc = db.query(TradingAccount).filter(
+        #                 TradingAccount.id == target_account
+        #             ).first()
+
+        #             print(f"🏦 Target account found: {acc}")
+
+        #             if not acc:
+        #                 print("⚠️ No TradingAccount found → skipping")
+        #                 continue
+
+        #             final_sl = new_sl
+        #             final_tp = new_tp
+
+        #             print(f"🧮 Initial SL/TP → SL={final_sl}, TP={final_tp}")
+
+        #             # =========================
+        #             # APPLY MODIFY (NO DIRECTION FLIPPING)
+        #             # =========================
+        #             print(f"🚀 Sending modify request → ticket={target_ticket}")
+
+        #             try:
+        #                 await trader.modify_position(
+        #                     acc.metaapi_account_id,
+        #                     target_ticket,
+        #                     final_sl,
+        #                     final_tp
+        #                 )
+
+        #                 print(f"✅ Modified position {target_ticket} for account {target_account}")
+
+        #                 log(
+        #                     db=db,
+        #                     account_id=target_account,
+        #                     level="TRADE",
+        #                     category="MODIFY",
+        #                     message=f"Synced SL/TP for {target_ticket}"
+        #                 )
+
+        #             except Exception as e:
+        #                 print(f"❌ Modify FAILED → account={target_account}, ticket={target_ticket}, error={e}")
+
+        #                 log(
+        #                     db=db,
+        #                     account_id=target_account,
+        #                     level="ERROR",
+        #                     category="MODIFY",
+        #                     message=f"Modify failed: {str(e)}"
+        #                 )
+
+        #     finally:
+        #         self._processing.discard(key)
+        #         print(f"🧹 Cleanup done for key={key}")
+
+
 
 # Singleton
 copy_engine = CopyEngine()
