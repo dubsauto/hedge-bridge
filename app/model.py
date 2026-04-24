@@ -33,6 +33,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     accounts = relationship("TradingAccount", back_populates="owner")
+    cycle_slots = relationship("CycleSlot", back_populates="owner")
 
 
 # =========================
@@ -43,7 +44,7 @@ class UserPermission(Base):
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     can_trade = Column(Boolean, default=True)
-
+    can_use_calculator = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class TradingAccount(Base):
@@ -260,33 +261,88 @@ class AccountLot(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # =========================
-# CREATE TABLES
+# FX CYCLE SLOTS
 # =========================
-# def init_db():
-#     Base.metadata.create_all(bind=engine)
-
-
+class CycleSlot(Base):
+    """
+    One named slot per user.  Holds both the calculator inputs (payload)
+    and the live TP/SL progress (cycle_state) so the frontend never has
+    to touch localStorage again.
+    """
+    __tablename__ = "cycle_slots"
+ 
+    id          = Column(Integer, primary_key=True)
+    user_id     = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name        = Column(String(128), nullable=False)
+ 
+    # --- calculator inputs ---------------------------------------------------
+    big_balance     = Column(Float, nullable=False, default=3000.0)
+    small_balance   = Column(Float, nullable=False, default=1000.0)
+    starting_pips   = Column(Integer, nullable=False, default=100)
+    num_phases      = Column(Integer, nullable=False, default=3)
+    trades_per_phase= Column(Integer, nullable=False, default=4)
+ 
+    # per-phase real losses as a JSON list, e.g. [1000.0, 1000.0, 1000.0]
+    losses          = Column(JSON, nullable=False, default=list)
+ 
+    # --- strategy settings (sidebar "Strategia Ciclo") -----------------------
+    ea_name             = Column(String(128), default="Cycle_EA_Premium")
+    use_name_as_comment = Column(Boolean, default=True)
+    signal_tf           = Column(String(16), default="5")       # MT5 ENUM value
+    ema_period          = Column(Integer, default=200)
+    bb_period           = Column(Integer, default=20)
+    bb_deviation        = Column(Float, default=2.0)
+    require_closed_candle   = Column(Boolean, default=True)
+    require_close_inside_bb = Column(Boolean, default=True)
+ 
+    # --- live cycle state ----------------------------------------------------
+    # Stored as JSON so we avoid a full separate table for a small dict.
+    # Shape: {
+    #   "currentPhase": 0,
+    #   "currentTradeIndex": 0,
+    #   "consecutiveTPCount": 0,
+    #   "slCount": 0,
+    #   "cycleWinner": null,          # null | "BIG" | "SMALL"
+    #   "outcomes": [[null,null,...], ...]   # phases × trades matrix
+    # }
+    cycle_state = Column(JSON, nullable=True)
+ 
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+ 
+    # relationships
+    owner   = relationship("User", back_populates="cycle_slots")
+    phases  = relationship("CyclePhase", back_populates="slot",
+                           cascade="all, delete-orphan", order_by="CyclePhase.phase_num")
+ 
+ 
 # =========================
-# TRADING ACCOUNTS (REPLACES VPS)
+# COMPUTED PHASES  (read-only cache — re-generated on every "Calculate")
 # =========================
-# class TradingAccount(Base):
-#     __tablename__ = "trading_accounts"
-
-#     id = Column(Integer, primary_key=True)
-
-#     owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
-
-#     name = Column(String(255), nullable=False)  # custom name
-#     login = Column(Integer, nullable=False)
-#     password = Column(Text, nullable=False)
-#     server = Column(String(255), nullable=False)
-
-#     # MetaAPI fields (important)
-#     metaapi_account_id = Column(String(255))  # returned from MetaAPI
-#     region = Column(String(50))
-#     status = Column(String(50), default="created")
-
-#     created_at = Column(DateTime, default=datetime.utcnow)
-#     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-#     owner = relationship("User", back_populates="accounts")
+class CyclePhase(Base):
+    """
+    One row per phase, written (or re-written) whenever the user hits
+    'Calcola Ciclo'.  Lets the backend serve the computed table without
+    re-running the arithmetic every request.
+    """
+    __tablename__ = "cycle_phases"
+ 
+    id       = Column(Integer, primary_key=True)
+    slot_id  = Column(Integer, ForeignKey("cycle_slots.id", ondelete="CASCADE"), nullable=False, index=True)
+    phase_num= Column(Integer, nullable=False)   # 1-based
+ 
+    # computed fields (mirrors calculateCycle() output)
+    recovery        = Column(Float, nullable=False)
+    tp_value        = Column(Float, nullable=False)   # TP money per trade
+    lot             = Column(Float, nullable=False)
+    sl_base_pips    = Column(Integer, nullable=False)
+    loss_real       = Column(Float, nullable=False)
+    disallineamento = Column(Float, nullable=False)
+ 
+    # trades as JSON list of dicts
+    # [{ "num":1, "lot":0.05, "tpPips":100, "slPips":100,
+    #    "tpMoney":50.0, "slMoney":50.0, "outcome": null }, ...]
+    trades = Column(JSON, nullable=False, default=list)
+ 
+    slot = relationship("CycleSlot", back_populates="phases")
+ 

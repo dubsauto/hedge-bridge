@@ -16,8 +16,6 @@ from hedgebridge.trading import trader
 router = APIRouter(prefix="/mt5", tags=["MT5 Accounts"])
 
 
-
-
 @router.get("/accounts")
 async def get_mt5_accounts(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -72,6 +70,7 @@ async def get_mt5_accounts(
 
             account_data.append({
                 "id": acc.id,
+                "db_id": acc.id,  # optional clarity for frontend
                 "name": acc.name,
                 "login": acc.login,
                 "server": acc.server,
@@ -93,32 +92,32 @@ async def get_mt5_accounts(
         db.close()
 
         # =========================
-        # STEP 4: ASYNC WORK
+        # STEP 4: ASYNC METRICS (CLEAN + FAST)
         # =========================
         import asyncio
 
-        tasks = []
-        for acc in account_data:
-            deployed = (
-                acc["state"].lower() == "deployed"
-                and acc["online"]
-                and acc["metaapi_account_id"]
-            )
-
-            if deployed:
-                tasks.append(
-                    asyncio.wait_for(
-                        account_manager.get_account_metrics(acc["metaapi_account_id"]),
-                        timeout=10
-                    )
+        async def fetch_metrics(acc):
+            try:
+                deployed = (
+                    acc["state"].lower() == "deployed"
+                    and acc["online"]
+                    and acc["metaapi_account_id"]
                 )
-            else:
-                tasks.append(None)
 
-        results = await asyncio.gather(*[
-            t if t else asyncio.sleep(0, result={})
-            for t in tasks
-        ], return_exceptions=True)
+                if not deployed:
+                    return {}
+
+                return await asyncio.wait_for(
+                    account_manager.get_account_metrics(acc["metaapi_account_id"]),
+                    timeout=6  # shorter since manager is optimized
+                )
+
+            except Exception:
+                return {}
+
+        tasks = [fetch_metrics(acc) for acc in account_data]
+
+        results = await asyncio.gather(*tasks, return_exceptions=False)
 
         # =========================
         # STEP 5: BUILD RESPONSE
@@ -126,14 +125,19 @@ async def get_mt5_accounts(
         account_list = []
 
         for acc, metrics in zip(account_data, results):
-            if isinstance(metrics, Exception) or metrics is None:
-                metrics = {}
+            metrics = metrics or {}
 
             account_list.append({
                 **acc,
+
+                # CORE METRICS
                 "balance": metrics.get("balance", "N/A"),
                 "equity": metrics.get("equity", "N/A"),
                 "latency_ms": metrics.get("latency_ms", "N/A"),
+
+                # 🔥 NEW FIELDS
+                "positions_count": metrics.get("positions_count", 0),
+                "dedicated_ip": metrics.get("dedicated_ip"),
             })
 
         return {"accounts": account_list}
@@ -144,7 +148,7 @@ async def get_mt5_accounts(
     except Exception as e:
         print(f"Error fetching accounts: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
-
+    
 
 # =========================
 # DEPLOY MT5 ACCOUNT
@@ -1402,16 +1406,18 @@ async def get_positions(
         return {"success": True, "positions": positions}
 
     except asyncio.TimeoutError:
-        # 🔥 critical: handle timeout cleanly
         return {
             "success": False,
             "positions": [],
-            "error": "Request timed out"
+            "error": "MetaApi not ready (connection timeout)"
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+        return {
+            "success": False,
+            "positions": [],
+            "error": str(e)
+        }
         # for acc in accounts:
         #     # Determine role from CopyRelationship
         #     # Determine role from CopyRelationship

@@ -51,6 +51,7 @@ async def get_profiles(
 
             perm = db.query(UserPermission).filter_by(user_id=user.id).first()
             can_trade = True if not perm else perm.can_trade
+            can_use_calculator = True if not perm else perm.can_use_calculator
 
             user_data = {
                 "id": user.id,
@@ -58,7 +59,8 @@ async def get_profiles(
                 "email": user.email,
                 "role": user.role,
                 "approval_status": user.approval_status,
-                "can_trade": can_trade
+                "can_trade": can_trade,
+                "can_use_calculator": can_use_calculator
             }
 
             all_users.append(user_data)
@@ -285,6 +287,7 @@ async def update_user(
         user_id = data.get("user_id")
         new_role = data.get("role")
         can_trade = data.get("can_trade")
+        can_use_calculator = data.get("can_use_calculator")
         new_password = data.get("password")
 
         if not user_id:
@@ -319,6 +322,15 @@ async def update_user(
                 db.add(perm)
 
             perm.can_trade = bool(can_trade)
+
+        if can_use_calculator is not None:
+            perm = db.query(UserPermission).filter_by(user_id=user_id).first()
+
+            if not perm:
+                perm = UserPermission(user_id=user_id)
+                db.add(perm)
+
+            perm.can_use_calculator = bool(can_use_calculator)
 
         if new_password:
             user.password_hash = hash_password(new_password)

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
-from app.schemas import AccountLotSchema
+from app.schemas.account_schema import AccountLotSchema
 from app.database import get_db
 from app.model import User, UserPermission, SymbolMappingEntry, SymbolMappingGroup, AccountLot, CopyTradeSettings
 from app.auth import SECRET_KEY, ALGORITHM, security 
@@ -33,13 +33,15 @@ async def dashboard(
         # Get can_trade from UserPermission (better than user.can_trade)
         permission = db.query(UserPermission).filter(UserPermission.user_id == user_id).first()
         can_trade = permission.can_trade if permission else False
+        can_use_calculator = permission.can_use_calculator if permission else False
 
         return {
             "message": "Welcome to Hedge Bridge Dashboard",
             "username": user.username,
             "role": user.role,
             "approval_status": user.approval_status,
-            "can_trade": can_trade
+            "can_trade": can_trade,
+            "can_use_calculator": can_use_calculator
         }
 
     except JWTError:

@@ -1,11 +1,8 @@
-# app/schemas.py
+# app/schemas/login_schema.py
+
 
 from pydantic import BaseModel
 
 class LoginRequest(BaseModel):
     identifier: str  # username or email
     password: str
-
-class AccountLotSchema(BaseModel):
-    account_id: int
-    lot_size: float

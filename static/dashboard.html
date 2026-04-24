@@ -32,6 +32,241 @@
     .log-warning { color: #ff9100; font-weight: 500; }
     .log-trade { color: #00b0ff; font-weight: 600; }
     .log-default { color: #cfd8dc; }
+
+    /* ====================== */
+    /* NEW ACCOUNT CARD STYLES */
+    /* ====================== */
+    #accountCards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 1rem;
+    }
+    .ui-acc-card {
+    width: 100%;
+    background: #f8f8f9;
+    border: 2px solid #d8dde5;
+    border-radius: 20px;
+    padding: 16px 18px 14px 18px;
+    position: relative;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .ui-acc-card.glow {
+    border-color: #00c853;
+    box-shadow: 0 0 0 3px rgba(0,200,83,0.1);
+    }
+    .ui-acc-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    }
+    .ui-acc-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    }
+    .ui-acc-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #ece7fb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    }
+    .ui-acc-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #15233a;
+    line-height: 1.2;
+    }
+    .ui-acc-right-top {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-end;
+    }
+    .ui-acc-status-badge {
+    min-width: 110px;
+    height: 28px;
+    border: 1.5px solid #d9dee6;
+    border-radius: 8px;
+    background: #f7f8fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #5f6d82;
+    gap: 6px;
+    padding: 0 10px;
+    white-space: nowrap;
+    }
+    .ui-acc-role-picker {
+    position: relative;
+    }
+    .ui-acc-role-btn {
+    min-width: 110px;
+    height: 28px;
+    border: 1.5px solid #cfc4ff;
+    border-radius: 8px;
+    background: #f6f1ff;
+    color: #683ff1;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    cursor: pointer;
+    gap: 4px;
+    transition: background 0.15s;
+    white-space: nowrap;
+    }
+    .ui-acc-role-btn.slave-style {
+    background: #e8f4ff;
+    border-color: #9ecfff;
+    color: #1a6fc4;
+    }
+    .ui-acc-role-btn.none-style {
+    background: #f5f6f8;
+    border-color: #d9dee6;
+    color: #50627c;
+    }
+    .ui-acc-role-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    z-index: 200;
+    min-width: 170px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+    padding: 6px 0;
+    }
+    .ui-acc-role-picker.open .ui-acc-role-menu { display: block; }
+    .ui-acc-pills {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    }
+    .ui-acc-pill-purple {
+    height: 24px;
+    padding: 0 10px;
+    border: 1.5px solid #cfc4ff;
+    border-radius: 7px;
+    background: #f6f1ff;
+    color: #683ff1;
+    font-size: 10px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    }
+    .ui-acc-pill-gray {
+    height: 24px;
+    padding: 0 10px;
+    border: 1.5px solid #d9dee6;
+    border-radius: 7px;
+    background: #f5f6f8;
+    color: #50627c;
+    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    }
+    .ui-acc-info-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+    color: #51627e;
+    font-size: 11px;
+    }
+    .ui-acc-info-icon {
+    font-size: 12px;
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    }
+    .ui-acc-pill-blue {
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: #d9ecff;
+    color: #1f8cff;
+    font-size: 10px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    }
+    .ui-acc-divider {
+    border: none;
+    border-top: 1.5px dashed #d0d9e3;
+    margin: 10px 0 10px 0;
+    }
+    .ui-acc-stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+    }
+    .ui-acc-stat-label {
+    font-size: 9px;
+    color: #8a96a8;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+    }
+    .ui-acc-stat-value {
+    font-size: 12px;
+    color: #132846;
+    font-weight: 600;
+    }
+    .ui-acc-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    }
+    .ui-acc-action-btn {
+    width: 55px;
+    height: 55px;
+    border: 1.5px solid #d9dee6;
+    border-radius: 9px;
+    background: #f5f6f8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    color: #7f8899;
+    }
+    .ui-acc-action-btn:hover {
+    transform: translateY(-1px);
+    background: #fff;
+    border-color: #b0bac7;
+    }
+    .ui-acc-action-btn.btn-danger-hover:hover { border-color: #ee4b52; color: #ee4b52; }
+    .ui-acc-action-btn.btn-primary-hover:hover { border-color: #1f9cf5; color: #1f9cf5; }
+    .ui-acc-action-btn.deploy-active { border-color: #ee4b52; color: #ee4b52; }
+
+    @media (max-width: 1100px) {
+    #accountCards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+    .ui-acc-stats { grid-template-columns: repeat(3, 1fr); }
+    .ui-acc-card-top { flex-wrap: wrap; gap: 10px; }
+    }
+    @media (max-width: 650px) {
+    #accountCards { grid-template-columns: 1fr; }
+    .ui-acc-card { padding: 14px 14px 12px 14px; border-radius: 14px; }
+    .ui-acc-stats { grid-template-columns: repeat(2, 1fr); }
+    .ui-acc-right-top { flex-direction: row; flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body class="ui-body ui-dashboard-page" data-activity-page="dashboard">
@@ -45,7 +280,11 @@
         <span class="ui-ico ui-ico-badge">D</span> Dashboard - hub
       </a>
       <a class="ui-nav-item" href="/mt5-connect">
-        <span class="ui-ico ui-ico-badge">M</span> MT5 - login & Connect
+        <span class="ui-ico ui-ico-badge">M</span> MT5 - login &amp; Connect
+      </a>
+
+      <a class="ui-nav-item" href="/cycle-calculator" id="liveCalculatorLink">
+        <span class="ui-ico ui-ico-badge">C</span> Cycle Calculator
       </a>
 
       <a class="ui-nav-item ui-nav-item-book" href="/profile-manage" id="profileManageLink">
@@ -126,7 +365,7 @@
         </div>
 
         <!-- Account Cards -->
-        <div class="ui-cardgrid mb-4" id="accountCards"></div>
+        <div id="accountCards" class="mb-4"></div>
 
         <!-- Real-time Trades + Quick Trade -->
         <div class="ui-bottom-grid">
@@ -184,7 +423,6 @@
               
               <div id="tradeInputs" style="display: none;">
                 <div class="row g-2">
-                  <!-- Symbol becomes a SELECT dropdown -->
                   <div class="col-6">
                     <select id="inpSymbol" class="ui-input form-select">
                       <option value="">Select Symbol from Mapping...</option>
@@ -238,10 +476,8 @@
                     </label>
                   </div>
                 </div>
-                <!-- LOT TABLE -->
                 <div id="fixedLotContainer" style="display:none;" class="mt-3">
                   <div class="ui-box-title mb-2">Account Lot Sizes</div>
-
                   <div class="table-responsive">
                     <table class="table table-sm">
                       <thead>
@@ -253,7 +489,6 @@
                       <tbody id="fixedLotTable"></tbody>
                     </table>
                   </div>
-
                   <button id="saveLotBtn" class="ui-btn ui-btn-sm mt-2">
                     💾 Save Lot Sizes
                   </button>
@@ -286,25 +521,24 @@
 <script>
 const token = localStorage.getItem("token");
 if (!token) window.location.href = "/";
+
 const formatMoney = (v) => {
-    if (v === null || v === undefined) return "N/A";
-    if (typeof v === "number") {
-      return v.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-    }
-    return v;
-  };
+  if (v === null || v === undefined) return "N/A";
+  if (typeof v === "number") {
+    return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  return v;
+};
+
 let fixedLotEnabled = false;
-let accountLots = {}; // { account_id: lot_size }
+let accountLots = {};
 let currentAccounts = [];
 let selectedAccountId = null;
 let canTrade = false;
 let logsInterval = null;
 let tradesInterval = null;
 let currentMappings = [];
-
+let canUseCalculator = false;
 
 // Logout
 document.getElementById("logoutBtn").addEventListener("click", () => {
@@ -314,198 +548,125 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 
 document.getElementById("fixedLotSwitch").addEventListener("change", async (e) => {
   fixedLotEnabled = e.target.checked;
-
-  const container = document.getElementById("fixedLotContainer");
-  container.style.display = fixedLotEnabled ? "block" : "none";
-
-  // 🔥 SAVE TO DB
+  document.getElementById("fixedLotContainer").style.display = fixedLotEnabled ? "block" : "none";
   await fetch("/dashboard/copy-settings", {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      fixed_lot_enabled: fixedLotEnabled
-    })
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ fixed_lot_enabled: fixedLotEnabled })
   });
-
-  if (fixedLotEnabled) {
-    await loadAccountLots();
-    renderLotTable();
-  }
+  if (fixedLotEnabled) { await loadAccountLots(); renderLotTable(); }
 });
 
 document.getElementById("pipsOffsetSwitch").addEventListener("change", async (e) => {
   const enabled = e.target.checked;
-
-  document.getElementById("pipsOffsetContainer").style.display =
-    enabled ? "block" : "none";
-
+  document.getElementById("pipsOffsetContainer").style.display = enabled ? "block" : "none";
   await fetch("/dashboard/copy-settings", {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      pips_offset_enabled: enabled
-    })
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ pips_offset_enabled: enabled })
   });
 });
 
 document.getElementById("savePipsOffsetBtn").addEventListener("click", async () => {
   const value = parseInt(document.getElementById("pipsOffsetInput").value);
-
-  if (isNaN(value) || value < 0) {
-    alert("Enter valid pips offset");
-    return;
-  }
-
+  if (isNaN(value) || value < 0) { alert("Enter valid pips offset"); return; }
   await fetch("/dashboard/copy-settings", {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      pips_offset: value
-    })
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ pips_offset: value })
   });
-
   alert("Pips offset saved");
 });
 
 async function loadCopySettings() {
-  const res = await fetch("/dashboard/copy-settings", {
-    headers: { "Authorization": "Bearer " + token }
-  });
-
+  const res = await fetch("/dashboard/copy-settings", { headers: { "Authorization": "Bearer " + token } });
   const data = await res.json();
   const pipsEnabled = data.pips_offset_enabled || false;
   const pipsValue = data.pips_offset || 0;
-
   fixedLotEnabled = data.fixed_lot_enabled || false;
-
-  const switchEl = document.getElementById("fixedLotSwitch");
-  const container = document.getElementById("fixedLotContainer");
-
-  // PIPS OFFSET
+  document.getElementById("fixedLotSwitch").checked = fixedLotEnabled;
+  document.getElementById("fixedLotContainer").style.display = fixedLotEnabled ? "block" : "none";
   document.getElementById("pipsOffsetSwitch").checked = pipsEnabled;
   document.getElementById("pipsOffsetInput").value = pipsValue;
-
-  document.getElementById("pipsOffsetContainer").style.display =
-    pipsEnabled ? "block" : "none";
-
-  switchEl.checked = fixedLotEnabled;
-  container.style.display = fixedLotEnabled ? "block" : "none";
-
-  if (fixedLotEnabled) {
-    await loadAccountLots();
-    renderLotTable();
-  }
+  document.getElementById("pipsOffsetContainer").style.display = pipsEnabled ? "block" : "none";
+  if (fixedLotEnabled) { await loadAccountLots(); renderLotTable(); }
 }
 
 async function loadAccountLots() {
-  const res = await fetch("/dashboard/account-lots", {
-    headers: { "Authorization": "Bearer " + token }
-  });
-
+  const res = await fetch("/dashboard/account-lots", { headers: { "Authorization": "Bearer " + token } });
   const data = await res.json();
-
   accountLots = {};
-  (data || []).forEach(row => {
-    accountLots[row.account_id] = row.lot_size;
-  });
+  (data || []).forEach(row => { accountLots[row.account_id] = row.lot_size; });
 }
 
 function renderLotTable() {
   const tbody = document.getElementById("fixedLotTable");
   tbody.innerHTML = "";
-
   currentAccounts.forEach(acc => {
-  const lot = accountLots[acc.id];
-
-  const displayValue = lot !== undefined ? lot : "";
-  const placeholder = lot !== undefined ? "" : "Not set";
-
+    const lot = accountLots[acc.id];
     const row = document.createElement("tr");
-
     row.innerHTML = `
       <td>${acc.name} (${acc.login})</td>
       <td>
         <input type="number" step="0.01" min="0.01"
           class="form-control form-control-sm lot-input"
           data-account-id="${acc.id}"
-          value="${displayValue}"
-          placeholder="${placeholder}">
-      </td>
-    `;
-
+          value="${lot !== undefined ? lot : ''}"
+          placeholder="${lot !== undefined ? '' : 'Not set'}">
+      </td>`;
     tbody.appendChild(row);
   });
 }
 
 document.getElementById("saveLotBtn").addEventListener("click", async () => {
   const inputs = document.querySelectorAll(".lot-input");
-
   const payload = [];
-
   inputs.forEach(inp => {
     const val = parseFloat(inp.value);
-
-    if (!val || val <= 0) {
-      alert("All accounts must have a valid lot size");
-      throw new Error("Invalid lot");
-    }
-
-    payload.push({
-      account_id: parseInt(inp.dataset.accountId),
-      lot_size: val
-    });
+    if (!val || val <= 0) { alert("All accounts must have a valid lot size"); throw new Error("Invalid lot"); }
+    payload.push({ account_id: parseInt(inp.dataset.accountId), lot_size: val });
   });
-
   await fetch("/dashboard/account-lots/save", {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-
   alert("Lot sizes saved");
 });
 
 async function loadDashboard() {
   try {
     const res = await fetch("/dashboard", { headers: { "Authorization": "Bearer " + token } });
-    if (res.status === 401) {
-      localStorage.removeItem("token");
-      window.location.href = "/";
-      return;
-    }
+    if (res.status === 401) { localStorage.removeItem("token"); window.location.href = "/"; return; }
     const userData = await res.json();
     const isAdmin = userData.role === "admin";
+    canUseCalculator = userData.can_use_calculator || false;
 
-    // Hide admin-only links for non-admin
     const profileManageLink = document.getElementById("profileManageLink");
     const profileActivityLink = document.getElementById("profileActivityLink");
+    const liveCalculatorLink = document.getElementById("liveCalculatorLink");
 
     if (!isAdmin) {
       if (profileManageLink) profileManageLink.style.display = "none";
       if (profileActivityLink) profileActivityLink.style.display = "none";
     }
-    document.getElementById("rolePill").textContent = `Role: ${userData.role === 'admin' ? 'Admin' : 'User'}`;
-    document.getElementById("userRoleDisplay").textContent = userData.role === 'admin' ? 'Admin' : 'User';
+    if (!canUseCalculator) {
+      if (liveCalculatorLink) liveCalculatorLink.style.display = "none";
+    }
+
+    document.getElementById("rolePill").textContent = `Role: ${isAdmin ? 'Admin' : 'User'}`;
+    document.getElementById("userRoleDisplay").textContent = isAdmin ? 'Admin' : 'User';
     document.getElementById("usernameDisplay").textContent = userData.username || "User";
     document.getElementById("userAvatar").textContent = (userData.username || "U").slice(0,1).toUpperCase();
+
     if (isAdmin) {
       updatePendingBadge();
-      setInterval(updatePendingBadge, 10000); // refresh every 10s
+      setInterval(updatePendingBadge, 10000);
     }
+
     canTrade = userData.can_trade || false;
     document.getElementById("tradingPill").textContent = `Trading: ${canTrade ? 'Enabled' : 'Disabled'}`;
+
     await loadUserMT5Accounts();
     await loadMappings();
     await loadCopySettings();
@@ -518,14 +679,12 @@ async function loadUserMT5Accounts() {
   try {
     const res = await fetch("/mt5/accounts", { headers: { "Authorization": "Bearer " + token } });
     const data = await res.json();
-    // ✅ SORT HERE
     currentAccounts = (data.accounts || []).sort((a, b) => a.id - b.id);
 
     document.getElementById("mt5Count").textContent = `MT5 Accounts: ${currentAccounts.length}`;
 
     const selector = document.getElementById("accountSelector");
     selector.innerHTML = `<option value="">Select MT5 Account</option>`;
-
     currentAccounts.forEach(acc => {
       const opt = document.createElement("option");
       opt.value = acc.id;
@@ -533,16 +692,12 @@ async function loadUserMT5Accounts() {
       selector.appendChild(opt);
     });
 
-    // ✅ restore selected account
     const savedAccountId = localStorage.getItem("selectedAccountId");
-
     if (savedAccountId && currentAccounts.some(a => a.id == savedAccountId)) {
       selector.value = savedAccountId;
       selectedAccountId = savedAccountId;
-
       updateLiveOverview(selectedAccountId);
       updateQuickTradeSection(selectedAccountId);
-
       if (selectedAccountId) {
         updateRealTimeTrades(selectedAccountId);
         startTradesPolling(selectedAccountId);
@@ -553,11 +708,10 @@ async function loadUserMT5Accounts() {
     }
 
     renderAccountCards(currentAccounts);
-    renderCopyTree()
+    renderCopyTree();
     updateCopySummary();
     renderMappingHeader();
     renderMappingTable();
-
   } catch (err) {
     console.error(err);
   }
@@ -573,72 +727,37 @@ function updateCopySummary() {
 function renderCopyTree() {
   const container = document.getElementById("copyTree");
   if (!container) return;
-
   const masters = currentAccounts.filter(a => a.copy_role === "master");
   const slaves = currentAccounts.filter(a => a.copy_role === "slave");
   const unassigned = currentAccounts.filter(a => a.copy_role === "none");
-
   let html = "";
-
-  // =========================
-  // NO MASTER STATE
-  // =========================
-  if (masters.length === 0) {
-    html += `<div class="ui-copy-empty">No Master account selected yet.</div>`;
-  }
-
-  // =========================
-  // MASTER → SLAVES
-  // =========================
+  if (masters.length === 0) html += `<div class="ui-copy-empty">No Master account selected yet.</div>`;
   masters.forEach(master => {
     const linkedSlaves = slaves.filter(s => s.master_account_id === master.id);
-
     html += `
       <div class="ui-copy-master">
-        <div class="ui-copy-master-title">
-          ${master.name} (${master.login})
-        </div>
-
+        <div class="ui-copy-master-title">${master.name} (${master.login})</div>
         <div class="ui-copy-slave-zone">
-          ${
-            linkedSlaves.length > 0
-              ? linkedSlaves.map(slave => `
-                  <div class="ui-copy-slave">
-                    ${slave.name} (${slave.login})
-                  </div>
-                `).join("")
-              : `<div class="ui-role-empty">No slaves linked</div>`
-          }
+          ${linkedSlaves.length > 0
+            ? linkedSlaves.map(s => `<div class="ui-copy-slave">${s.name} (${s.login})</div>`).join("")
+            : `<div class="ui-role-empty">No slaves linked</div>`}
         </div>
-      </div>
-    `;
+      </div>`;
   });
-
-  // =========================
-  // UNASSIGNED
-  // =========================
   html += `
     <div class="ui-copy-none">
       <div class="ui-copy-none-title">Unassigned Accounts</div>
       <div class="ui-copy-none-list">
-        ${
-          unassigned.length > 0
-            ? unassigned.map(acc => `
-                <div class="ui-copy-none-item">
-                  ${acc.name} (${acc.login})
-                </div>
-              `).join("")
-            : `<div class="ui-role-empty">All accounts assigned</div>`
-        }
+        ${unassigned.length > 0
+          ? unassigned.map(acc => `<div class="ui-copy-none-item">${acc.name} (${acc.login})</div>`).join("")
+          : `<div class="ui-role-empty">All accounts assigned</div>`}
       </div>
-    </div>
-  `;
-
+    </div>`;
   container.innerHTML = html;
 }
 
 // ========================
-// RENDER CARDS
+// NEW ACCOUNT CARD RENDERER
 // ========================
 function renderAccountCards(accounts) {
   const container = document.getElementById("accountCards");
@@ -651,233 +770,324 @@ function renderAccountCards(accounts) {
 
   accounts.forEach(acc => {
     const isDeployed = acc.state === "deployed" || acc.online === true;
-    const roleDisplay = (acc.copy_role || "none").toUpperCase();
+    const role = acc.copy_role || "none";
+    const roleDisplay = role.toUpperCase();
     const hasMasters = currentAccounts.some(a => a.copy_role === "master" && a.id !== acc.id);
 
+    let roleBtnClass = "none-style";
+    if (role === "master") roleBtnClass = "";
+    else if (role === "slave") roleBtnClass = "slave-style";
+
+    // Direction icon for action button
+    let dirIcon = "↕";
+    if (acc.copy_role === "slave") {
+    dirIcon = acc.copy_direction === "opposite" ? "⬆️⬇️" : "⬆️⬆️";
+    }
+
+    // Connected To value
+    let connectedTo = "None";
+    if (acc.copy_role === "master") {
+      connectedTo = `${acc.slave_count} Slave${acc.slave_count === 1 ? "" : "s"}`;
+    } else if (acc.copy_role === "slave") {
+      connectedTo = acc.master_name || "No Master";
+    }
+    const calcDisabled = !canUseCalculator;
     const card = document.createElement("div");
-    card.className = `ui-vpscard ${isDeployed ? 'glow' : ''}`;
+    
+    card.className = `ui-acc-card ${isDeployed ? 'glow' : ''}`;
 
     card.innerHTML = `
-      <!-- TOP ROW -->
-      <div class="d-flex align-items-start justify-content-between">
-        <div class="ui-vpsname">${acc.name}</div>
+      <!-- TOP ROW: name + status/role -->
+      <div class="ui-acc-card-top">
+        <div class="ui-acc-name">
+          <div class="ui-acc-icon">🖥️</div>
+          <div class="ui-acc-title">${acc.name}</div>
+        </div>
 
-        <button class="ui-linkbtn ui-linkbtn-vps deploy-btn" data-id="${acc.id}">
-          ${isDeployed ? 'Undeploy' : 'Deploy'}
+        <div class="ui-acc-right-top">
+          <div class="ui-acc-status-badge">
+            <span class="ui-dot ${isDeployed ? 'online' : 'offline'}"></span>
+            <span>${isDeployed ? 'Connected' : 'Disconnected'}</span>
+          </div>
+
+          <div class="ui-acc-role-picker" data-account-id="${acc.id}">
+            <button class="ui-acc-role-btn ${roleBtnClass}" type="button" data-acc-role-toggle>
+              Role: ${roleDisplay} ▾
+            </button>
+            <div class="ui-acc-role-menu">
+              <button class="ui-role-option" data-role="none">None</button>
+              <button class="ui-role-option" data-role="master">Master</button>
+              <div class="ui-role-subwrap">
+                <button class="ui-role-option slave-btn ${!hasMasters ? 'disabled' : ''}"
+                        data-role="slave" ${!hasMasters ? 'disabled' : ''}>
+                  Slave ▶
+                </button>
+                <div class="ui-role-submenu"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PILLS -->
+      <div class="ui-acc-pills">
+        <div class="ui-acc-pill-purple">API_BRIDGE</div>
+        <div class="ui-acc-pill-gray">ID: ${acc.id}</div>
+      </div>
+
+      <!-- INFO ROWS -->
+      <div class="ui-acc-info-row">
+        <div class="ui-acc-info-icon">🌐</div>
+        <div>${acc.login}&nbsp;&nbsp;@&nbsp;&nbsp;${acc.server}</div>
+      </div>
+
+      <div class="ui-acc-info-row">
+        <div class="ui-acc-info-icon">📍</div>
+        <div>${acc.dedicated_ip || 'No dedicated IP'}</div>
+        ${acc.dedicated_ip ? `<div class="ui-acc-pill-blue">DEDICATED IP</div>` : ''}
+      </div>
+
+      <hr class="ui-acc-divider" />
+
+      <!-- STATS GRID -->
+      <div class="ui-acc-stats">
+        <div>
+          <div class="ui-acc-stat-label">Balance</div>
+          <div class="ui-acc-stat-value">${formatMoney(acc.balance)}</div>
+        </div>
+        <div>
+          <div class="ui-acc-stat-label">Equity</div>
+          <div class="ui-acc-stat-value">${(acc.equity !== undefined && acc.equity !== "N/A") ? formatMoney(acc.equity) : 'N/A'}</div>
+        </div>
+        <div>
+          <div class="ui-acc-stat-label">Positions</div>
+          <div class="ui-acc-stat-value">${acc.positions_count ?? 0}</div>
+        </div>
+        <div>
+          <div class="ui-acc-stat-label">Latency</div>
+          <div class="ui-acc-stat-value">${acc.latency_ms ? acc.latency_ms + ' ms' : 'N/A'}</div>
+        </div>
+        <div>
+          <div class="ui-acc-stat-label">Connected To</div>
+          <div class="ui-acc-stat-value">${connectedTo}</div>
+        </div>
+      </div>
+
+      <hr class="ui-acc-divider" />
+
+      <!-- ACTION BUTTONS -->
+      <div class="ui-acc-actions">
+        <button class="ui-acc-action-btn btn-danger-hover deploy-btn ${isDeployed ? 'deploy-active' : ''}"
+                data-id="${acc.id}"
+                title="${isDeployed ? 'Undeploy' : 'Deploy'}">
+          ${isDeployed ? '⏹' : '▶'}
         </button>
-      </div>
-
-      <!-- 🔥 COPY + ROLE SAME ROW -->
-      ${acc.copy_role === "slave" ? `
-        <div class="d-flex align-items-center justify-content-between mt-2">
-          
-          <!-- LEFT -->
-          <div class="ui-copy-label">copy direction</div>
-
-          <!-- RIGHT -->
-          <div class="ui-role-picker" data-account-id="${acc.id}">
-            <button class="ui-linkbtn ui-linkbtn-role" type="button" data-role-toggle>
-              Role: ${roleDisplay}
-            </button>
-
-            <div class="ui-role-menu">
-              <button class="ui-role-option" data-role="none">None</button>
-              <button class="ui-role-option" data-role="master">Master</button>
-
-              <div class="ui-role-subwrap">
-                <button class="ui-role-option slave-btn ${!hasMasters ? 'disabled' : ''}" 
-                        data-role="slave"
-                        ${!hasMasters ? 'disabled' : ''}>
-                  Slave ▶
-                </button>
-                <div class="ui-role-submenu"></div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        <!-- DROPDOWN (LEFT ALIGNED UNDER LABEL) -->
-        <div class="mt-1">
-          <select class="ui-select copy-direction" data-account-id="${acc.id}">
-            <option value="same" ${acc.copy_direction === "same" ? "selected" : ""}>Same Direction</option>
-            <option value="opposite" ${acc.copy_direction === "opposite" ? "selected" : ""}>Opposite Direction</option>
-          </select>
-        </div>
-      ` : `
-        <!-- NON-SLAVE → JUST ROLE ON RIGHT -->
-        <div class="d-flex justify-content-end mt-2">
-          <div class="ui-role-picker" data-account-id="${acc.id}">
-            <button class="ui-linkbtn ui-linkbtn-role" type="button" data-role-toggle>
-              Role: ${roleDisplay}
-            </button>
-
-            <div class="ui-role-menu">
-              <button class="ui-role-option" data-role="none">None</button>
-              <button class="ui-role-option" data-role="master">Master</button>
-
-              <div class="ui-role-subwrap">
-                <button class="ui-role-option slave-btn ${!hasMasters ? 'disabled' : ''}" 
-                        data-role="slave"
-                        ${!hasMasters ? 'disabled' : ''}>
-                  Slave ▶
-                </button>
-                <div class="ui-role-submenu"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      `}
-
-      <!-- STATUS -->
-      <div class="ui-vpsstatus-wrap mt-2">
-        <span class="ui-dot ${isDeployed ? 'online' : 'offline'}"></span>
-        <span class="ui-vpsstatus">${isDeployed ? 'Deployed' : 'Undeployed'}</span>
-      </div>
-
-      <!-- META GRID -->
-      <div class="ui-vpsmeta-grid mt-2">
-
-      <!-- ROW 1 -->
-      <div class="meta-left">
-        <span class="ui-muted">MT5 LOGIN:</span>
-        <span class="meta-value">${acc.login}</span>
-      </div>
-
-      <div class="meta-right">
-        <span class="ui-muted">BALANCE:</span>
-        <span class="meta-value">${formatMoney(acc.balance)}</span>
-      </div>
-
-      <div class="meta-divider"></div>
-
-      <!-- ROW 2 -->
-      <div class="meta-left">
-        <span class="ui-muted">BROKER:</span>
-        <span class="meta-value">${acc.server}</span>
-      </div>
-
-      <div class="meta-right">
-        <span class="ui-muted">EQUITY:</span>
-        <span class="meta-value">${acc.equity ?? "N/A"}</span>
-      </div>
-
-      <div class="meta-divider"></div>
-
-      <!-- ROW 3 -->
-      <div class="meta-left">
-        <span class="ui-muted">CONNECTED TO:</span>
-        <span class="meta-value">
-          ${
-            acc.copy_role === "master"
-              ? `${acc.slave_count} SLAVE${acc.slave_count === 1 ? "" : "S"}`
-              : acc.copy_role === "slave"
-              ? (acc.master_name || "No Master")
-              : "None"
-          }
-        </span>
-      </div>
-
-      <div class="meta-right">
-        <span class="ui-muted">LATENCY:</span>
-        <span class="meta-value">
-          ${acc.latency_ms ? acc.latency_ms + " ms" : "N/A"}
-        </span>
-      </div>
-
+        <button class="ui-acc-action-btn btn-primary-hover"
+                title="Edit account — go to MT5 Connect"
+                onclick="window.location.href='/mt5-connect'">
+          ✎
+        </button>
+        <button class="ui-acc-action-btn btn-danger-hover acc-delete-btn"
+                data-id="${acc.id}"
+                title="Remove account">
+          🗑️
+        </button>
+        <button class="ui-acc-action-btn ${acc.copy_role === 'slave' ? 'btn-primary-hover copy-dir-btn' : ''}"
+                data-id="${acc.id}"
+                data-role="${acc.copy_role}"
+                data-direction="${acc.copy_direction || 'same'}"
+                style="${acc.copy_role !== 'slave' ? 'opacity:0.35; cursor:default;' : ''}"
+                title="${acc.copy_role === 'slave' ? (acc.copy_direction === 'opposite' ? 'Click: switch to same direction' : 'Click: switch to opposite direction') : 'Not a slave account'}">
+        ${dirIcon}
+        </button>
+        <button class="ui-acc-action-btn btn-primary-hover ${calcDisabled ? 'disabled' : ''}"
+                ${calcDisabled ? '' : `onclick="window.location.href='/cycle-calculator'"`}
+                style="${calcDisabled ? 'opacity:0.35; cursor:not-allowed;' : ''}"
+                title="${calcDisabled ? 'Calculator access disabled' : 'Open Cycle Calculator'}">
+        📊
+        </button>
+        <button class="ui-acc-action-btn btn-primary-hover"
+                title="Account terminal">
+          🖥️
+        </button>
       </div>
     `;
 
     container.appendChild(card);
   });
 
-  attachRoleListeners();
-}
-// ========================
-// ROLE UPDATE
-// ========================
-async function updateRole(accountId, payload) {
-  await fetch(`/mt5/accounts/${accountId}/role`, {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  await new Promise(r => setTimeout(r, 300));
-  await loadUserMT5Accounts();
+  attachCardRoleListeners();
+  attachCardActionListeners();
 }
 
-
 // ========================
-// ROLE HANDLERS
+// CARD-SPECIFIC ROLE LISTENERS
 // ========================
-function attachRoleListeners() {
-
-  document.querySelectorAll(".ui-role-picker").forEach(picker => {
-
+function attachCardRoleListeners() {
+  document.querySelectorAll(".ui-acc-role-picker").forEach(picker => {
     const accountId = parseInt(picker.dataset.accountId);
-    const toggleBtn = picker.querySelector("[data-role-toggle]");
+    const toggleBtn = picker.querySelector("[data-acc-role-toggle]");
     const slaveBtn = picker.querySelector('[data-role="slave"]');
     const submenu = picker.querySelector(".ui-role-submenu");
 
-    // Toggle menu
     toggleBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      document.querySelectorAll(".ui-role-picker")
-        .forEach(p => p.classList.remove("open"));
+      document.querySelectorAll(".ui-acc-role-picker").forEach(p => p.classList.remove("open"));
       picker.classList.toggle("open");
     });
 
-    // None + Master
-    picker.querySelectorAll('[data-role="none"],[data-role="master"]')
-      .forEach(btn => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          await updateRole(accountId, { role: btn.dataset.role });
-        });
+    picker.querySelectorAll('[data-role="none"],[data-role="master"]').forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await updateRole(accountId, { role: btn.dataset.role });
       });
+    });
 
-    // SLAVE
     if (slaveBtn && submenu && !slaveBtn.disabled) {
       slaveBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-
         submenu.innerHTML = "";
-
-        const masters = currentAccounts.filter(a =>
-          a.id !== accountId && a.copy_role === "master"
-        );
-
+        const masters = currentAccounts.filter(a => a.id !== accountId && a.copy_role === "master");
         masters.forEach(master => {
           const btn = document.createElement("button");
           btn.className = "ui-role-option";
           btn.textContent = `${master.name} (${master.login})`;
-
-          btn.onclick = async () => {
-            await updateRole(accountId, {
-              role: "slave",
-              master_account_id: master.id
-            });
-          };
-
+          btn.onclick = async () => { await updateRole(accountId, { role: "slave", master_account_id: master.id }); };
           submenu.appendChild(btn);
         });
-
-        // ✅ LIGHT THEME FIX
         submenu.style.display = "block";
         submenu.style.position = "absolute";
         submenu.style.background = "#ffffff";
         submenu.style.color = "#000";
         submenu.style.border = "1px solid #ccc";
         submenu.style.zIndex = "9999";
+        submenu.style.borderRadius = "8px";
+        submenu.style.padding = "6px 0";
+        submenu.style.minWidth = "180px";
+        submenu.style.boxShadow = "0 4px 16px rgba(0,0,0,0.13)";
       });
     }
   });
 
-  // Strict Mode
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".ui-acc-role-picker").forEach(p => p.classList.remove("open"));
+  });
+}
+
+// ========================
+// CARD ACTION BUTTON LISTENERS
+// ========================
+function attachCardActionListeners() {  
+  // Delete
+  document.querySelectorAll(".acc-delete-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const accountId = btn.dataset.id;
+      if (!confirm("Remove this MT5 account? This cannot be undone.")) return;
+      try {
+        const res = await fetch(`/mt5/accounts/${accountId}`, {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (res.ok) {
+          await loadUserMT5Accounts();
+        } else {
+          const d = await res.json();
+          alert("Delete failed: " + (d.detail || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Network error while deleting");
+      }
+    });
+  });
+
+  // Deploy/Undeploy
+  document.querySelectorAll(".deploy-btn").forEach(btn => {
+    btn.addEventListener("click", () => handleDeployClick(btn));
+  });
+    // Copy direction toggle
+    document.querySelectorAll(".copy-dir-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+        const accountId = btn.dataset.id;
+        const role = btn.dataset.role;
+        if (role !== "slave") return;
+
+        const currentDir = btn.dataset.direction;
+        const newDir = currentDir === "same" ? "opposite" : "same";
+
+        try {
+        const res = await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+            body: JSON.stringify({ copy_direction: newDir })
+        });
+        if (res.ok) {
+            btn.dataset.direction = newDir;
+            btn.title = newDir === "opposite" ? "Opposite direction" : "Same direction";
+            btn.textContent = newDir === "opposite" ? "⬆️⬇️" : "⬆️⬆️";
+        } else {
+            const d = await res.json();
+            alert("Failed to update direction: " + (d.detail || "Unknown error"));
+        }
+        } catch (err) {
+        alert("Network error updating copy direction");
+        }
+    });
+    });
+}
+
+// ========================
+// ROLE UPDATE
+// ========================
+async function updateRole(accountId, payload) {
+  await fetch(`/mt5/accounts/${accountId}/role`, {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await new Promise(r => setTimeout(r, 300));
+  await loadUserMT5Accounts();
+}
+
+
+// Keep old attachRoleListeners for any legacy uses (sidebar role pickers)
+function attachRoleListeners() {
+  document.querySelectorAll(".ui-role-picker").forEach(picker => {
+    const accountId = parseInt(picker.dataset.accountId);
+    const toggleBtn = picker.querySelector("[data-role-toggle]");
+    const slaveBtn = picker.querySelector('[data-role="slave"]');
+    const submenu = picker.querySelector(".ui-role-submenu");
+    if (!toggleBtn) return;
+
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll(".ui-role-picker").forEach(p => p.classList.remove("open"));
+      picker.classList.toggle("open");
+    });
+
+    picker.querySelectorAll('[data-role="none"],[data-role="master"]').forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await updateRole(accountId, { role: btn.dataset.role });
+      });
+    });
+
+    if (slaveBtn && submenu && !slaveBtn.disabled) {
+      slaveBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        submenu.innerHTML = "";
+        const masters = currentAccounts.filter(a => a.id !== accountId && a.copy_role === "master");
+        masters.forEach(master => {
+          const btn = document.createElement("button");
+          btn.className = "ui-role-option";
+          btn.textContent = `${master.name} (${master.login})`;
+          btn.onclick = async () => { await updateRole(accountId, { role: "slave", master_account_id: master.id }); };
+          submenu.appendChild(btn);
+        });
+        submenu.style.cssText = "display:block;position:absolute;background:#fff;color:#000;border:1px solid #ccc;z-index:9999;border-radius:8px;padding:6px 0;min-width:180px;box-shadow:0 4px 16px rgba(0,0,0,0.13);";
+      });
+    }
+  });
+
   document.querySelectorAll(".strict-checkbox").forEach(chk => {
     chk.addEventListener("change", async () => {
       const accountId = chk.dataset.accountId;
@@ -889,24 +1099,6 @@ function attachRoleListeners() {
     });
   });
 
-  // Copy Direction
-  document.querySelectorAll(".copy-direction").forEach(select => {
-    select.addEventListener("change", async () => {
-      const accountId = select.dataset.accountId;
-      await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-        body: JSON.stringify({ copy_direction: select.value })
-      });
-    });
-  });
-
-  // Deploy buttons
-  document.querySelectorAll(".deploy-btn").forEach(btn => {
-    btn.addEventListener("click", () => handleDeployClick(btn));
-  });
-
-  // Close menus
   document.addEventListener("click", () => {
     document.querySelectorAll(".ui-role-picker").forEach(p => p.classList.remove("open"));
   });
@@ -914,11 +1106,9 @@ function attachRoleListeners() {
 
 async function handleDeployClick(btn) {
   const accountId = btn.dataset.id;
-  const action = btn.textContent.toLowerCase().includes("undeploy") ? "undeploy" : "deploy";
-
+  const action = btn.title.toLowerCase().includes("undeploy") ? "undeploy" : "deploy";
   btn.disabled = true;
-  btn.textContent = "Processing...";
-
+  btn.textContent = "…";
   try {
     await fetch(`/mt5/accounts/${accountId}/${action}`, {
       method: "POST",
@@ -934,21 +1124,13 @@ async function handleDeployClick(btn) {
 // Account selector
 document.getElementById("accountSelector").addEventListener("change", (e) => {
   selectedAccountId = e.target.value;
-
   localStorage.setItem("selectedAccountId", selectedAccountId);
-
   updateLiveOverview(selectedAccountId);
   updateQuickTradeSection(selectedAccountId);
-
-  // 🔥 force immediate update FIRST
   updateRealTimeTrades(selectedAccountId);
-
-  // 🔥 then start polling
   startTradesPolling(selectedAccountId);
-
   startLogsPolling(selectedAccountId);
 });
-
 
 function updateLiveOverview(selectedId) {
   const account = currentAccounts.find(a => a.id == selectedId);
@@ -959,7 +1141,6 @@ function updateLiveOverview(selectedId) {
     document.getElementById("connDot").className = "ui-dot offline";
     return;
   }
-
   const isConnected = account.online || account.state === "deployed";
   document.getElementById("connStatus").textContent = isConnected ? "Connected" : "Offline";
   document.getElementById("acctLogin").textContent = account.login;
@@ -967,262 +1148,183 @@ function updateLiveOverview(selectedId) {
   document.getElementById("connDot").className = `ui-dot ${isConnected ? 'online' : 'offline'}`;
 }
 
-  async function updateRealTimeTrades(accountId) {
-    const tbody = document.getElementById("tradesBody");
-    const lblScope = document.getElementById("lblScope");
-
-    const account = currentAccounts.find(a => a.id == accountId);
-
-    lblScope.textContent = account
-      ? `${account.name} (${account.login})`
-      : "No account selected";
-
-    if (!accountId) {
-      tbody.innerHTML = `<tr><td colspan="7" class="text-center">Select an account</td></tr>`;
-      return;
-    }
-
-    try {
-      const res = await fetch(`/mt5/accounts/${accountId}/positions`, {
-        headers: { "Authorization": "Bearer " + token }
-      });
-
-      const data = await res.json();
-
-      const positions = data.positions || [];
-
-      if (!positions.length) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center">No open trades</td></tr>`;
-        return;
-      }
-
-      tbody.innerHTML = positions.map(p => {
-        const pnl = Number(p.profit || 0);
-        const pnlColor = pnl > 0 ? "color: #00c853; font-weight:600;" :
-                        pnl < 0 ? "color: #ff1744; font-weight:600;" : "color: #999;";
-        const pnlSign = pnl > 0 ? "+" : "";
-
-        return `
-          <tr>
-            <td>${p.symbol}</td>
-            <td>${p.type.replace("POSITION_TYPE_", "")}</td>
-            <td>${p.volume}</td>
-            <td>${p.openPrice}</td>
-            <td>${p.stopLoss || "-"}</td>
-            <td>${p.takeProfit || "-"}</td>
-            <td style="${pnlColor}">${pnlSign}${pnl.toFixed(2)}</td>
-            <td class="text-end">
-              <button class="btn btn-sm btn-danger" onclick="closeTrade('${p.id}')">Close</button>
-            </td>
-          </tr>
-        `;
-      }).join("");
-
-    } catch (err) {
-      console.error(err);
-    }
+async function updateRealTimeTrades(accountId) {
+  const tbody = document.getElementById("tradesBody");
+  const lblScope = document.getElementById("lblScope");
+  const account = currentAccounts.find(a => a.id == accountId);
+  lblScope.textContent = account ? `${account.name} (${account.login})` : "No account selected";
+  if (!accountId) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center">Select an account</td></tr>`;
+    return;
   }
-
-  // ========================
-  // QUICK TRADE - CLEAN VERSION
-  // ========================
-
-  const btnBuy = document.getElementById("btnBuy");
-  const btnSell = document.getElementById("btnSell");
-
-  if (btnBuy && btnSell) {
-    btnBuy.addEventListener("click", () => placeTrade("buy"));
-    btnSell.addEventListener("click", () => placeTrade("sell"));
-  }
-
-  // ========================
-  // SL/TP MODE HANDLER
-  // ========================
-  const slTpModeSelect = document.getElementById("slTpMode");
-  const slInput = document.getElementById("inpSL");
-  const tpInput = document.getElementById("inpTP");
-
-  if (slTpModeSelect && slInput && tpInput) {
-    slTpModeSelect.addEventListener("change", () => {
-      const mode = slTpModeSelect.value;
-
-      if (mode === "points") {
-        slInput.placeholder = "SL (points)";
-        tpInput.placeholder = "TP (points)";
-      } else {
-        slInput.placeholder = "SL (price)";
-        tpInput.placeholder = "TP (price)";
-      }
+  try {
+    const res = await fetch(`/mt5/accounts/${accountId}/positions`, {
+      headers: { "Authorization": "Bearer " + token }
     });
+    const data = await res.json();
+    const positions = data.positions || [];
+    if (!positions.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center">No open trades</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = positions.map(p => {
+      const pnl = Number(p.profit || 0);
+      const pnlColor = pnl > 0 ? "color:#00c853;font-weight:600;" : pnl < 0 ? "color:#ff1744;font-weight:600;" : "color:#999;";
+      const pnlSign = pnl > 0 ? "+" : "";
+      return `
+        <tr>
+          <td>${p.symbol}</td>
+          <td>${p.type.replace("POSITION_TYPE_", "")}</td>
+          <td>${p.volume}</td>
+          <td>${p.openPrice}</td>
+          <td>${p.stopLoss || "-"}</td>
+          <td>${p.takeProfit || "-"}</td>
+          <td style="${pnlColor}">${pnlSign}${pnl.toFixed(2)}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-danger" onclick="closeTrade('${p.id}')">Close</button>
+          </td>
+        </tr>`;
+    }).join("");
+  } catch (err) {
+    console.error(err);
   }
+}
 
-  function populateSymbolDropdown(selectedAccountId) {
-    const symbolSelect = document.getElementById("inpSymbol");
-    const noMappingMsg = document.getElementById("noMappingMsg");
+const btnBuy = document.getElementById("btnBuy");
+const btnSell = document.getElementById("btnSell");
+if (btnBuy && btnSell) {
+  btnBuy.addEventListener("click", () => placeTrade("buy"));
+  btnSell.addEventListener("click", () => placeTrade("sell"));
+}
 
-    if (!symbolSelect) return;
+const slTpModeSelect = document.getElementById("slTpMode");
+const slInput = document.getElementById("inpSL");
+const tpInput = document.getElementById("inpTP");
+if (slTpModeSelect && slInput && tpInput) {
+  slTpModeSelect.addEventListener("change", () => {
+    const mode = slTpModeSelect.value;
+    slInput.placeholder = mode === "points" ? "SL (points)" : "SL (price)";
+    tpInput.placeholder = mode === "points" ? "TP (points)" : "TP (price)";
+  });
+}
 
-    symbolSelect.innerHTML = '<option value="">Select Symbol from Mapping...</option>';
-    noMappingMsg.style.display = "none";
-
-    if (!selectedAccountId || !currentMappings || currentMappings.length === 0) {
-      noMappingMsg.style.display = "block";
-      return;
-    }
-
-    const symbolsForAccount = new Set();
-
-    currentMappings.forEach(group => {
-      const symbol = group.symbols?.[selectedAccountId] || group.symbols?.[String(selectedAccountId)];
-      if (symbol && symbol.toString().trim() !== "") {
-        symbolsForAccount.add(symbol.toString().trim());
-      }
-    });
-
-    if (symbolsForAccount.size === 0) {
-      noMappingMsg.style.display = "block";
-      return;
-    }
-
-    Array.from(symbolsForAccount).sort().forEach(symbol => {
-      const option = document.createElement("option");
-      option.value = symbol;
-      option.textContent = symbol;
-      symbolSelect.appendChild(option);
-    });
+function populateSymbolDropdown(selectedAccountId) {
+  const symbolSelect = document.getElementById("inpSymbol");
+  const noMappingMsg = document.getElementById("noMappingMsg");
+  if (!symbolSelect) return;
+  symbolSelect.innerHTML = '<option value="">Select Symbol from Mapping...</option>';
+  noMappingMsg.style.display = "none";
+  if (!selectedAccountId || !currentMappings || currentMappings.length === 0) {
+    noMappingMsg.style.display = "block";
+    return;
   }
+  const symbolsForAccount = new Set();
+  currentMappings.forEach(group => {
+    const symbol = group.symbols?.[selectedAccountId] || group.symbols?.[String(selectedAccountId)];
+    if (symbol && symbol.toString().trim() !== "") symbolsForAccount.add(symbol.toString().trim());
+  });
+  if (symbolsForAccount.size === 0) { noMappingMsg.style.display = "block"; return; }
+  Array.from(symbolsForAccount).sort().forEach(symbol => {
+    const option = document.createElement("option");
+    option.value = symbol;
+    option.textContent = symbol;
+    symbolSelect.appendChild(option);
+  });
+}
 
-  function updateQuickTradeSection(selectedId) {
-    const tradeInputs = document.getElementById("tradeInputs");
-    const tradeDisabledMsg = document.getElementById("tradeDisabledMsg");
-    const noAccountMsg = document.getElementById("noAccountSelectedMsg");
-    const quickTradeTarget = document.getElementById("quickTradeTarget");
-    const quickTradeAccountName = document.getElementById("quickTradeAccountName");
+function updateQuickTradeSection(selectedId) {
+  const tradeInputs = document.getElementById("tradeInputs");
+  const tradeDisabledMsg = document.getElementById("tradeDisabledMsg");
+  const noAccountMsg = document.getElementById("noAccountSelectedMsg");
+  const quickTradeTarget = document.getElementById("quickTradeTarget");
+  const quickTradeAccountName = document.getElementById("quickTradeAccountName");
 
-    if (!canTrade) {
-      tradeInputs.style.display = "none";
-      tradeDisabledMsg.style.display = "block";
-      noAccountMsg.style.display = "none";
-      quickTradeTarget.style.display = "none";
-      return;
-    }
-
-    if (!selectedId) {
-      tradeInputs.style.display = "none";
-      tradeDisabledMsg.style.display = "none";
-      noAccountMsg.style.display = "block";
-      quickTradeTarget.style.display = "none";
-      return;
-    }
-
-    const account = currentAccounts.find(a => a.id == selectedId);
-    quickTradeAccountName.textContent = account ? account.name : "-";
-
-    tradeInputs.style.display = "block";
-    tradeDisabledMsg.style.display = "none";
+  if (!canTrade) {
+    tradeInputs.style.display = "none";
+    tradeDisabledMsg.style.display = "block";
     noAccountMsg.style.display = "none";
-    quickTradeTarget.style.display = "block";
-
-    populateSymbolDropdown(selectedId);
+    quickTradeTarget.style.display = "none";
+    return;
   }
-
-  async function placeTrade(action) {
-    if (!selectedAccountId) {
-      alert("Please select an MT5 account first");
-      return;
-    }
-
-    const symbol = document.getElementById("inpSymbol").value.trim();
-    const volume = parseFloat(document.getElementById("inpLot").value);
-
-    if (!symbol) {
-      alert("Please select a symbol from the dropdown");
-      return;
-    }
-
-    if (isNaN(volume) || volume <= 0) {
-      alert("Please enter a valid lot size");
-      return;
-    }
-
-    const originalBuyText = btnBuy.textContent;
-    const originalSellText = btnSell.textContent;
-
-    btnBuy.disabled = true;
-    btnSell.disabled = true;
-    btnBuy.textContent = "Processing...";
-    btnSell.textContent = "Processing...";
-
-    const payload = {
-      action: action,
-      symbol: symbol,
-      volume: volume,
-      sl: parseFloat(document.getElementById("inpSL").value) || null,
-      tp: parseFloat(document.getElementById("inpTP").value) || null,
-      sl_tp_mode: document.getElementById("slTpMode").value, // ✅ NEW
-      fixed_lot_enabled: fixedLotEnabled
-    };
-
-    try {
-      const res = await fetch(`/mt5/accounts/${selectedAccountId}/trade`, {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + token,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data.detail || "Trade failed");
-
-      log(`✅ ${action.toUpperCase()} ${symbol} order placed successfully`, "TRADE");
-      
-    } catch (err) {
-      log(`❌ ${err.message}`, "ERROR");
-      console.error(err);
-    } finally {
-      btnBuy.disabled = false;
-      btnSell.disabled = false;
-      btnBuy.textContent = originalBuyText;
-      btnSell.textContent = originalSellText;
-    }
+  if (!selectedId) {
+    tradeInputs.style.display = "none";
+    tradeDisabledMsg.style.display = "none";
+    noAccountMsg.style.display = "block";
+    quickTradeTarget.style.display = "none";
+    return;
   }
+  const account = currentAccounts.find(a => a.id == selectedId);
+  quickTradeAccountName.textContent = account ? account.name : "-";
+  tradeInputs.style.display = "block";
+  tradeDisabledMsg.style.display = "none";
+  noAccountMsg.style.display = "none";
+  quickTradeTarget.style.display = "block";
+  populateSymbolDropdown(selectedId);
+}
+
+async function placeTrade(action) {
+  if (!selectedAccountId) { alert("Please select an MT5 account first"); return; }
+  const symbol = document.getElementById("inpSymbol").value.trim();
+  const volume = parseFloat(document.getElementById("inpLot").value);
+  if (!symbol) { alert("Please select a symbol from the dropdown"); return; }
+  if (isNaN(volume) || volume <= 0) { alert("Please enter a valid lot size"); return; }
+
+  const originalBuyText = btnBuy.textContent;
+  const originalSellText = btnSell.textContent;
+  btnBuy.disabled = true;
+  btnSell.disabled = true;
+  btnBuy.textContent = "Processing...";
+  btnSell.textContent = "Processing...";
+
+  const payload = {
+    action: action,
+    symbol: symbol,
+    volume: volume,
+    sl: parseFloat(document.getElementById("inpSL").value) || null,
+    tp: parseFloat(document.getElementById("inpTP").value) || null,
+    sl_tp_mode: document.getElementById("slTpMode").value,
+    fixed_lot_enabled: fixedLotEnabled
+  };
+
+  try {
+    const res = await fetch(`/mt5/accounts/${selectedAccountId}/trade`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Trade failed");
+    log(`✅ ${action.toUpperCase()} ${symbol} order placed successfully`, "TRADE");
+  } catch (err) {
+    log(`❌ ${err.message}`, "ERROR");
+    console.error(err);
+  } finally {
+    btnBuy.disabled = false;
+    btnSell.disabled = false;
+    btnBuy.textContent = originalBuyText;
+    btnSell.textContent = originalSellText;
+  }
+}
 
 function startTradesPolling(accountId) {
   if (tradesInterval) clearInterval(tradesInterval);
-
   updateRealTimeTrades(accountId);
-
-  tradesInterval = setInterval(() => {
-    updateRealTimeTrades(accountId);
-  }, 3000);
+  tradesInterval = setInterval(() => updateRealTimeTrades(accountId), 3000);
 }
 
 async function closeTrade(positionId) {
   if (!selectedAccountId) return;
-
   if (!confirm("Close this trade?")) return;
-
   try {
     const res = await fetch(`/mt5/accounts/${selectedAccountId}/close-position`, {
       method: "POST",
-      headers: {
-        "Authorization": "Bearer " + token,
-        "Content-Type": "application/json"
-      },
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ position_id: positionId })
     });
-
     const data = await res.json();
-
     if (!res.ok) throw new Error(data.detail || "Close failed");
-
     log(`🔻 Trade closed successfully`);
-
     updateRealTimeTrades(selectedAccountId);
-
   } catch (err) {
     log(`❌ ${err.message}`);
   }
@@ -1230,42 +1332,21 @@ async function closeTrade(positionId) {
 
 async function loadLogs(accountId) {
   if (!accountId) return;
-
   try {
     const res = await fetch(`/mt5/accounts/${accountId}/logs`, {
       headers: { "Authorization": "Bearer " + token }
     });
-
     const logs = await res.json();
-
     const box = document.getElementById("logBox");
-
-    // // 🔥 FORCE newest first (very important)
-    // const sorted = logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    const logsSorted = logs; //.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    box.innerHTML = logsSorted.map(l => {
-
+    box.innerHTML = logs.map(l => {
       const level = (l.level || "INFO").toUpperCase();
-
       let cls = "log-default";
-
       if (level === "INFO") cls = "log-info";
       else if (level === "ERROR") cls = "log-error";
       else if (level === "WARNING") cls = "log-warning";
       else if (level === "TRADE") cls = "log-trade";
-
-      return `
-        <div class="${cls}">
-          [${level}] ${l.message}
-        </div>
-      `;
+      return `<div class="${cls}">[${level}] ${l.message}</div>`;
     }).join("");
-
-    // 🔥 keep scroll at TOP (latest visible first)
-    //box.scrollTop = 0;
-
   } catch (err) {
     console.error(err);
   }
@@ -1273,302 +1354,171 @@ async function loadLogs(accountId) {
 
 function startLogsPolling(accountId) {
   if (logsInterval) clearInterval(logsInterval);
-
   if (!accountId) return;
-
   loadLogs(accountId);
-
-  logsInterval = setInterval(() => {
-    loadLogs(accountId);
-  }, 2000); // 🔥 faster refresh
+  logsInterval = setInterval(() => loadLogs(accountId), 2000);
 }
 
 function startHeartbeat(pageName) {
   setInterval(() => {
     fetch("admin/activity/heartbeat", {
       method: "POST",
-      headers: {
-        "Authorization": "Bearer " + token,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        page: pageName,
-        action: "heartbeat"
-      })
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ page: pageName, action: "heartbeat" })
     });
   }, 15000);
 }
 
 function log(msg, level = "INFO") {
   const box = document.getElementById("logBox");
-
   let cls = "log-default";
-
   if (level === "INFO") cls = "log-info";
   else if (level === "ERROR") cls = "log-error";
   else if (level === "WARNING") cls = "log-warning";
   else if (level === "TRADE") cls = "log-trade";
-
   const div = document.createElement("div");
   div.className = cls;
   div.textContent = `[${level}] ${msg}`;
-
   box.prepend(div);
 }
 
-  // ========================
-  // SYMBOL MAPPING FUNCTIONS (Improved with Group Name)
-  // ========================
+// ========================
+// SYMBOL MAPPING
+// ========================
+function renderMappingHeader() {
+  const header = document.getElementById("mappingHeader");
+  if (!header) return;
+  let html = `<th style="min-width:180px;">Group Name</th>`;
+  html += currentAccounts.map(acc => `
+    <th style="min-width:130px;text-align:center;vertical-align:middle;">
+      ${acc.name}<br><small style="opacity:0.7;">(${acc.login})</small>
+    </th>`).join("");
+  html += `<th style="width:100px;text-align:center;">Actions</th>`;
+  header.innerHTML = `<tr>${html}</tr>`;
+}
 
-  function renderMappingHeader() {
-    const header = document.getElementById("mappingHeader");
-    if (!header) return;
-
-    let html = `<th style="min-width:180px;">Group Name</th>`;
-
-    html += currentAccounts.map(acc => `
-      <th style="min-width:130px; text-align:center; vertical-align:middle;">
-        ${acc.name}<br>
-        <small style="opacity:0.7;">(${acc.login})</small>
-      </th>
-    `).join("");
-
-    html += `<th style="width:100px; text-align:center;">Actions</th>`;
-
-    header.innerHTML = `<tr>${html}</tr>`;
+function renderMappingTable() {
+  const body = document.getElementById("mappingBody");
+  if (!body) return;
+  body.innerHTML = "";
+  if (currentAccounts.length === 0) {
+    body.innerHTML = `<tr><td colspan="${currentAccounts.length + 2}" class="text-center py-4">No accounts loaded yet</td></tr>`;
+    return;
   }
-
-  function renderMappingTable() {
-    const body = document.getElementById("mappingBody");
-    if (!body) return;
-    body.innerHTML = "";
-
-    if (currentAccounts.length === 0) {
-      body.innerHTML = `<tr><td colspan="${currentAccounts.length + 2}" class="text-center py-4">No accounts loaded yet</td></tr>`;
-      return;
-    }
-
-    if (!currentMappings || currentMappings.length === 0) {
-      body.innerHTML = `
-        <tr>
-          <td colspan="${currentAccounts.length + 2}" class="text-center py-4 text-muted">
-            No symbol mapping groups yet.<br>
-            Click "<strong>+ Add New Group</strong>" to create one.
-          </td>
-        </tr>`;
-      return;
-    }
-
-    currentMappings.forEach(group => {
-      const row = document.createElement("tr");
-      row.dataset.groupId = group.group_id;
-
-      // Group Name Input (First Column) - FIXED
-      const groupName = group.name || `Group ${group.group_id}`;   // Safe fallback
-
-      let rowHTML = `
-        <td>
-          <input type="text" class="ui-input mapping-group-name form-control form-control-sm" 
-                value="${groupName}" 
-                placeholder="e.g. Gold XAUUSD">
-        </td>`;
-
-      // Symbol inputs for each account
-      rowHTML += currentAccounts.map(acc => {
-        const value = group.symbols?.[acc.id] || group.symbols?.[String(acc.id)] || "";
-        return `
-          <td>
-            <input type="text" 
-                  class="ui-input mapping-input form-control form-control-sm" 
-                  data-account-id="${acc.id}" 
-                  value="${value}" 
-                  placeholder="Symbol">
-          </td>`;
-      }).join("");
-
-      // Actions
-      rowHTML += `
-        <td class="text-center">
-          <button class="btn btn-sm btn-danger delete-group" 
-                  data-group-id="${group.group_id}"
-                  title="Delete group">
-            Delete
-          </button>
-        </td>`;
-
-      row.innerHTML = rowHTML;
-      body.appendChild(row);
-    });
+  if (!currentMappings || currentMappings.length === 0) {
+    body.innerHTML = `<tr><td colspan="${currentAccounts.length + 2}" class="text-center py-4 text-muted">No symbol mapping groups yet.<br>Click "<strong>+ Add New Group</strong>" to create one.</td></tr>`;
+    return;
   }
-
-  // Add New Group Row
-  document.getElementById("addMappingRow").addEventListener("click", () => {
-    const body = document.getElementById("mappingBody");
-
+  currentMappings.forEach(group => {
     const row = document.createElement("tr");
-    row.className = "new-group-row";
-
-    let rowHTML = `
-      <td>
-        <input type="text" class="ui-input mapping-group-name form-control form-control-sm" 
-              placeholder="Group Name (e.g. Gold)">
-      </td>`;
-
-    rowHTML += currentAccounts.map(acc => `
-      <td>
-        <input type="text" 
-              class="ui-input mapping-input form-control form-control-sm" 
-              data-account-id="${acc.id}" 
-              placeholder="Symbol">
-      </td>`).join("");
-
-    rowHTML += `
-      <td class="text-center">
-        <button class="btn btn-sm btn-danger remove-row">X</button>
-      </td>`;
-
+    row.dataset.groupId = group.group_id;
+    const groupName = group.name || `Group ${group.group_id}`;
+    let rowHTML = `<td><input type="text" class="ui-input mapping-group-name form-control form-control-sm" value="${groupName}" placeholder="e.g. Gold XAUUSD"></td>`;
+    rowHTML += currentAccounts.map(acc => {
+      const value = group.symbols?.[acc.id] || group.symbols?.[String(acc.id)] || "";
+      return `<td><input type="text" class="ui-input mapping-input form-control form-control-sm" data-account-id="${acc.id}" value="${value}" placeholder="Symbol"></td>`;
+    }).join("");
+    rowHTML += `<td class="text-center"><button class="btn btn-sm btn-danger delete-group" data-group-id="${group.group_id}">Delete</button></td>`;
     row.innerHTML = rowHTML;
     body.appendChild(row);
   });
+}
 
-  // Delete & Remove handlers
-  document.addEventListener("click", async (e) => {
-    if (e.target.classList.contains("remove-row")) {
-      e.target.closest("tr").remove();
-      return;
-    }
+document.getElementById("addMappingRow").addEventListener("click", () => {
+  const body = document.getElementById("mappingBody");
+  const row = document.createElement("tr");
+  row.className = "new-group-row";
+  let rowHTML = `<td><input type="text" class="ui-input mapping-group-name form-control form-control-sm" placeholder="Group Name (e.g. Gold)"></td>`;
+  rowHTML += currentAccounts.map(acc => `<td><input type="text" class="ui-input mapping-input form-control form-control-sm" data-account-id="${acc.id}" placeholder="Symbol"></td>`).join("");
+  rowHTML += `<td class="text-center"><button class="btn btn-sm btn-danger remove-row">X</button></td>`;
+  row.innerHTML = rowHTML;
+  body.appendChild(row);
+});
 
-    if (e.target.classList.contains("delete-group")) {
-      const groupId = e.target.dataset.groupId;
-      if (confirm("Delete this mapping group permanently?")) {
-        try {
-          const res = await fetch(`/dashboard/symbol-mapping/${groupId}`, {
-            method: "DELETE",
-            headers: { "Authorization": "Bearer " + token }
-          });
-          if (res.ok) await loadMappings();
-        } catch (err) {
-          alert("Error deleting group");
-        }
+document.addEventListener("click", async (e) => {
+  if (e.target.classList.contains("remove-row")) {
+    e.target.closest("tr").remove();
+    return;
+  }
+  if (e.target.classList.contains("delete-group")) {
+    const groupId = e.target.dataset.groupId;
+    if (confirm("Delete this mapping group permanently?")) {
+      try {
+        const res = await fetch(`/dashboard/symbol-mapping/${groupId}`, {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (res.ok) await loadMappings();
+      } catch (err) {
+        alert("Error deleting group");
       }
     }
-  });
+  }
+});
 
-  // SAVE ALL MAPPINGS (Now includes group name)
-  document.getElementById("saveMappingsBtn").addEventListener("click", async () => {
-    const rows = document.querySelectorAll("#mappingBody tr");
-    const payload = {};
-
-    rows.forEach((row, index) => {
-      const groupNameInput = row.querySelector(".mapping-group-name");
-      const groupName = groupNameInput ? groupNameInput.value.trim() : "";
-
-      const inputs = row.querySelectorAll(".mapping-input");
-      const entries = [];
-
-      inputs.forEach(input => {
-        const symbol = input.value.trim();
-        if (symbol) {
-          entries.push({
-            account_id: parseInt(input.dataset.accountId),
-            symbol: symbol
-          });
-        }
-      });
-
-      if (entries.length > 0) {
-        const groupId = row.dataset.groupId || `new_${Date.now()}_${index}`;
-        payload[groupId] = {
-          name: groupName || `Mapping Group ${index + 1}`,
-          entries: entries
-        };
-      }
+document.getElementById("saveMappingsBtn").addEventListener("click", async () => {
+  const rows = document.querySelectorAll("#mappingBody tr");
+  const payload = {};
+  rows.forEach((row, index) => {
+    const groupNameInput = row.querySelector(".mapping-group-name");
+    const groupName = groupNameInput ? groupNameInput.value.trim() : "";
+    const inputs = row.querySelectorAll(".mapping-input");
+    const entries = [];
+    inputs.forEach(input => {
+      const symbol = input.value.trim();
+      if (symbol) entries.push({ account_id: parseInt(input.dataset.accountId), symbol: symbol });
     });
-
-    if (Object.keys(payload).length === 0) {
-      alert("Please add at least one group with symbols.");
-      return;
-    }
-
-    try {
-      const res = await fetch("/dashboard/symbol-mapping/save", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + token,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        alert("✅ Symbol mappings saved successfully!");
-        await loadMappings();
-      } else {
-        alert("Failed to save mappings");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Network error while saving");
+    if (entries.length > 0) {
+      const groupId = row.dataset.groupId || `new_${Date.now()}_${index}`;
+      payload[groupId] = { name: groupName || `Mapping Group ${index + 1}`, entries: entries };
     }
   });
-
-  // Load Mappings
-  async function loadMappings() {
-    try {
-      const res = await fetch("/dashboard/symbol-mapping", {
-        headers: { "Authorization": "Bearer " + token }
-      });
-
-      if (!res.ok) throw new Error("Failed to load");
-
-      const data = await res.json();
-      currentMappings = data.mappings || [];
-
-      // Add name to each group if missing (for backward compatibility)
-      currentMappings.forEach(g => {
-        if (!g.name) g.name = "Unnamed Group";
-      });
-
-      renderMappingHeader();
-      renderMappingTable();
-      // Refresh quick trade dropdown if account is selected
-      if (selectedAccountId) {
-        populateSymbolDropdown(selectedAccountId);
-      }
-    } catch (err) {
-      console.error(err);
-      currentMappings = [];
-      renderMappingHeader();
-      renderMappingTable();
-    }
+  if (Object.keys(payload).length === 0) { alert("Please add at least one group with symbols."); return; }
+  try {
+    const res = await fetch("/dashboard/symbol-mapping/save", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) { alert("✅ Symbol mappings saved successfully!"); await loadMappings(); }
+    else alert("Failed to save mappings");
+  } catch (err) {
+    console.error(err);
+    alert("Network error while saving");
   }
+});
 
-  async function updatePendingBadge() {
-    try {
-      const res = await fetch("/admin/profiles", {
-        headers: { "Authorization": "Bearer " + token }
-      });
-
-      const data = await res.json();
-      const count = data.pending_count || 0;
-
-      const badge = document.getElementById("pendingApprovalsBadge");
-
-      if (!badge) return;
-
-      badge.textContent = count;
-
-      // show only if > 0
-      if (count > 0) {
-        badge.style.display = "inline-block";
-      } else {
-        badge.style.display = "none";
-      }
-
-    } catch (err) {
-      console.error("Failed to load pending badge", err);
-    }
+async function loadMappings() {
+  try {
+    const res = await fetch("/dashboard/symbol-mapping", { headers: { "Authorization": "Bearer " + token } });
+    if (!res.ok) throw new Error("Failed to load");
+    const data = await res.json();
+    currentMappings = data.mappings || [];
+    currentMappings.forEach(g => { if (!g.name) g.name = "Unnamed Group"; });
+    renderMappingHeader();
+    renderMappingTable();
+    if (selectedAccountId) populateSymbolDropdown(selectedAccountId);
+  } catch (err) {
+    console.error(err);
+    currentMappings = [];
+    renderMappingHeader();
+    renderMappingTable();
   }
+}
+
+async function updatePendingBadge() {
+  try {
+    const res = await fetch("/admin/profiles", { headers: { "Authorization": "Bearer " + token } });
+    const data = await res.json();
+    const count = data.pending_count || 0;
+    const badge = document.getElementById("pendingApprovalsBadge");
+    if (!badge) return;
+    badge.textContent = count;
+    badge.style.display = count > 0 ? "inline-block" : "none";
+  } catch (err) {
+    console.error("Failed to load pending badge", err);
+  }
+}
 
 // Start
 loadDashboard();

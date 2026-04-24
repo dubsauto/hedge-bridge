@@ -10,6 +10,7 @@ from app.api.metaconnect_routes import router as metaconnect_router
 from app.api.auth_routes import router as auth_router
 from app.api.admin_routes import router as admin_router
 from app.api.dashboard_routes import router as dashboard_router
+from app.api.cycle_calculator_routes import router as cycle_calculator_router
 from hedgebridge.listener_manager import listener_manager
 
 load_dotenv()
@@ -26,9 +27,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Starting up - Creating database tables if they don't exist...")
-    await init_database()
-    if not hasattr(app.state, "listener_task"):
-        app.state.listener_task = asyncio.create_task(listener_manager.start())
+    # await init_database()
+    # if not hasattr(app.state, "listener_task"):
+    #     app.state.listener_task = asyncio.create_task(listener_manager.start())
 
 
 # =========================
@@ -62,6 +63,10 @@ async def serve_dashboard():
 async def serve_mt5_connect():
     return FileResponse("static/mt5-connect.html")
 
+@app.get("/cycle-calculator")
+async def serve_cycle_calculator():
+    return FileResponse("static/cycle-calculator.html")
+
 
 # =========================
 # Include API Routers
@@ -70,6 +75,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(metaconnect_router)
 app.include_router(dashboard_router)        # ← Added this
+app.include_router(cycle_calculator_router)
 
 
 

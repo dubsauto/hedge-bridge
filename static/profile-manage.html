@@ -77,6 +77,7 @@
             <th>Status</th>
             <th>Role</th>
             <th>Can Trade</th>
+            <th>Live Calculator</th>
             <th class="text-end">Actions</th>
           </tr>
         </thead>
@@ -220,6 +221,13 @@ function renderUsersTable(users) {
           <span class="form-check-label">Allow</span>
         </label>
       </td>
+      <td>
+        <label class="form-check form-switch">
+          <input type="checkbox" class="form-check-input can-calculator-toggle" data-user-id="${user.id}" 
+                 ${user.can_use_calculator ? 'checked' : ''}>
+          <span class="form-check-label">Calculator</span>
+        </label>
+      </td>
       <td class="text-end">
         <button class="ui-btn px-3 save-btn" data-user-id="${user.id}" disabled>Save</button>
         ${user.username !== 'adabs' && user.username !== 'alessandro' ? 
@@ -230,7 +238,7 @@ function renderUsersTable(users) {
   });
 
   // Enable save button when something changes
-  document.querySelectorAll(".role-select, .can-trade-toggle").forEach(input => {
+  document.querySelectorAll(".role-select, .can-trade-toggle, .can-calculator-toggle").forEach(input => {
     input.addEventListener("change", () => {
       const userId = input.dataset.userId;
       const saveBtn = document.querySelector(`.save-btn[data-user-id="${userId}"]`);
@@ -277,6 +285,7 @@ function renderUsersTable(users) {
       const password = passwordInput.value.trim();
       const roleSelect = document.querySelector(`.role-select[data-user-id="${userId}"]`);
       const canTradeCheck = document.querySelector(`.can-trade-toggle[data-user-id="${userId}"]`);
+      const canCalculatorCheck = document.querySelector(`.can-calculator-toggle[data-user-id="${userId}"]`);
 
       try {
         const res = await fetch("/admin/update-user", {
@@ -289,6 +298,7 @@ function renderUsersTable(users) {
             user_id: parseInt(userId),
             role: roleSelect.value,
             can_trade: canTradeCheck.checked,
+            can_use_calculator: canCalculatorCheck.checked,
             password: password || null
           })
         });

@@ -43,7 +43,8 @@ async def create_default_admins(db):
 
         permission = UserPermission(
             user_id=user.id,
-            can_trade=True
+            can_trade=True,
+            can_use_calculator=True
         )
         db.add(permission)
 

@@ -57,30 +57,6 @@ class MT5Trader:
 
         raise Exception(f"Failed to establish connection for {account_id}")
     
-    
-    # async def _get_connection(self, account_id: str):
-    #     if account_id in self._connections:
-    #         return self._connections[account_id]
-
-    #     api = await self._get_api()
-    #     account = await api.metatrader_account_api.get_account(account_id)
-
-    #     # Only deploy if needed
-    #     if account.state != 'DEPLOYED':
-    #         print(f"Deploying account {account_id}...")
-    #         await account.deploy()
-
-    #     await account.wait_connected()
-
-    #     connection = account.get_rpc_connection()
-    #     await connection.connect()
-    #     await connection.wait_synchronized()
-
-    #     # ✅ CACHE IT
-    #     self._connections[account_id] = connection
-
-    #     return connection
-
     async def get_price(self, account_id: str, symbol: str) -> Dict[str, float]:
         """
         Get current market price (bid/ask) for a symbol

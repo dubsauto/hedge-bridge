@@ -1,0 +1,2754 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FX Cycle Calculator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+    <style>
+        :root {
+            --bg: #F5F6F8;
+            --surface: #FFFFFF;
+            --surface-hover: #F0F2F5;
+            --border: #E2E5EA;
+            --border-light: #D0D4DA;
+            --text: #1A1D23;
+            --text-secondary: #6B7280;
+            --accent: #00A383;
+            --accent-dim: #00A38318;
+            --danger: #E53E3E;
+            --danger-dim: #E53E3E18;
+            --warning: #D97706;
+            --warning-dim: #D9770618;
+            --success: #00A383;
+            --info: #2563EB;
+            --info-dim: #2563EB18;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── TOAST ─────────────────────────────────────────── */
+        #toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.25s ease;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: var(--accent); }
+        .toast.error   { background: var(--danger); }
+        .toast.info    { background: var(--info); }
+
+        /* ── SPINNER overlay ───────────────────────────────── */
+        #spinner {
+            position: fixed; inset: 0;
+            background: rgba(255,255,255,0.6);
+            backdrop-filter: blur(2px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 8000;
+        }
+        #spinner.show { display: flex; }
+        .spin-ring {
+            width: 44px; height: 44px;
+            border: 4px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .app-container {
+            display: grid;
+            grid-template-columns: 300px 1fr 340px;
+            min-height: 100vh;
+            gap: 1px;
+            background: var(--border);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--surface);
+            padding: 24px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+
+        .logo { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: 1px; margin-bottom: 4px; }
+        .logo span { color: var(--text); }
+
+        .section-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        .input-group label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+        .input-group input, .input-group select {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 9px 11px;
+            color: var(--text);
+            font-size: 14px;
+            transition: all 0.2s;
+            outline: none;
+            width: 100%;
+        }
+        .input-group input:focus, .input-group select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-dim);
+        }
+        .input-group input::placeholder { color: var(--text-secondary); opacity: 0.6; }
+
+        .switch { position: relative; display: inline-block; width: 42px; height: 22px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider-switch {
+            position: absolute; cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--border); border-radius: 22px; transition: 0.2s;
+        }
+        .slider-switch:before {
+            position: absolute; content: "";
+            height: 16px; width: 16px; left: 3px; bottom: 3px;
+            background: #fff; border-radius: 50%; transition: 0.2s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        .switch input:checked + .slider-switch { background: var(--accent); }
+        .switch input:checked + .slider-switch:before { transform: translateX(20px); }
+
+        /* Lock */
+        .locked input:not([type="text"]):not(#slotName),
+        .locked select,
+        .locked button:not(.slot-safe) {
+            pointer-events: none !important; opacity: 0.45 !important;
+            cursor: not-allowed !important; filter: grayscale(0.5);
+        }
+        .locked input[type="number"],
+        .locked input[type="text"]:not(#slotName):not(#stratEAName) {
+            pointer-events: none !important; opacity: 0.45 !important;
+            background: var(--surface-hover) !important;
+        }
+        .locked .section-title { opacity: 0.5; }
+
+        .active-slot-banner {
+            display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            background: var(--accent-dim); border: 1px solid var(--accent);
+            color: var(--accent); padding: 10px 12px; border-radius: 8px;
+            margin-bottom: 8px; font-size: 12px; font-weight: 600;
+        }
+        .active-slot-banner.no-slot { background: var(--warning-dim); border-color: var(--warning); color: var(--warning); }
+        .active-slot-banner .slot-name-display { font-weight: 700; }
+        .active-slot-banner button {
+            background: transparent; border: 1px solid currentColor; color: inherit;
+            padding: 3px 8px; border-radius: 4px; font-size: 10px; cursor: pointer;
+            font-weight: 600; text-transform: uppercase;
+        }
+        .active-slot-banner button:hover { background: currentColor; color: var(--surface); }
+
+        .slot-item.active-slot { border-color: var(--accent) !important; background: var(--accent-dim) !important; }
+
+        .input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        .btn {
+            background: var(--accent); color: #000; border: none; border-radius: 8px;
+            padding: 11px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+            transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
+        .btn-secondary { background: var(--border-light); color: var(--text); }
+        .btn-sm { padding: 5px 10px; font-size: 11px; }
+
+        .formula-preview {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+            padding: 12px; font-size: 12px; line-height: 1.7; color: var(--text-secondary);
+        }
+        .formula-preview code { color: var(--accent); font-family: 'SF Mono', monospace; font-size: 11px; }
+        .formula-preview .highlight { color: var(--warning); font-weight: 600; }
+
+        .slots-section { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); }
+
+        .slot-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 10px; background: var(--bg); border-radius: 6px;
+            margin-bottom: 6px; font-size: 12px; cursor: pointer;
+            transition: all 0.2s; border: 1px solid transparent;
+        }
+        .slot-item:hover { background: var(--surface-hover); border-color: var(--border-light); }
+        .slot-actions { display: flex; gap: 4px; }
+        .slot-btn {
+            background: none; border: none; color: var(--text-secondary);
+            cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+        }
+        .slot-btn:hover { color: var(--text); background: var(--border); }
+
+        .win-conditions {
+            background: var(--bg); border-radius: 8px; padding: 12px;
+            margin-top: 10px; font-size: 12px; line-height: 1.8; color: var(--text-secondary);
+        }
+        .win-conditions strong { color: var(--accent); }
+        .win-conditions .small-win-cond { color: var(--danger); }
+
+        /* Main */
+        .main-content { background: var(--bg); padding: 24px; overflow-y: auto; max-height: 100vh; }
+        .main-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+        }
+        .main-header h1 { font-size: 22px; font-weight: 700; }
+
+        .status-badge {
+            padding: 6px 14px; border-radius: 20px; font-size: 12px;
+            font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .status-badge.active   { background: var(--info-dim);    color: var(--info);    border: 1px solid var(--info); }
+        .status-badge.big-win  { background: var(--accent-dim);  color: var(--accent);  border: 1px solid var(--accent); }
+        .status-badge.small-win{ background: var(--danger-dim);  color: var(--danger);  border: 1px solid var(--danger); }
+
+        .config-chip {
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 5px 12px; border-radius: 16px; font-size: 11px; color: var(--text-secondary);
+        }
+        .config-chip strong { color: var(--accent); }
+
+        .phases-container { display: flex; flex-direction: column; gap: 16px; }
+
+        .phase-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; overflow: hidden; transition: all 0.3s;
+            box-shadow: 0 1px 3px rgba(20,25,35,0.04);
+        }
+        .phase-card.active-phase { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 4px 16px rgba(0,163,131,0.08); }
+        .phase-card.big-won      { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 4px 20px rgba(0,163,131,0.12); }
+        .phase-card.small-won    { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger), 0 4px 20px rgba(229,62,62,0.12); }
+
+        .phase-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 20px; background: var(--bg); border-bottom: 1px solid var(--border);
+            flex-wrap: wrap; gap: 10px;
+        }
+        .phase-title { display: flex; align-items: center; gap: 10px; }
+        .phase-number {
+            width: 32px; height: 32px; border-radius: 8px; background: var(--border);
+            display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px;
+        }
+        .phase-card.active-phase .phase-number { background: var(--accent); color: #000; }
+        .phase-card.big-won      .phase-number { background: var(--accent); color: #000; }
+        .phase-card.small-won    .phase-number { background: var(--danger); color: #fff; }
+        .phase-name { font-weight: 600; font-size: 15px; }
+        .phase-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; }
+        .phase-meta .value { color: var(--text); font-weight: 600; }
+
+        .phase-body { padding: 16px 20px; overflow-x: auto; }
+
+        .trades-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+        .trades-table th {
+            text-align: left; padding: 10px 12px; color: var(--text-secondary);
+            font-weight: 600; font-size: 11px; text-transform: uppercase;
+            letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
+        }
+        .trades-table td { padding: 11px 12px; border-bottom: 1px solid var(--border); transition: background 0.2s; }
+        .trades-table tr:hover td { background: var(--surface-hover); }
+        .trades-table tr.current-trade td { background: var(--accent-dim); }
+        .trades-table tr.tp-hit td { background: rgba(0,163,131,0.10); }
+        .trades-table tr.sl-hit td { background: rgba(229,62,62,0.08); }
+
+        .trade-num   { font-weight: 700; color: var(--text-secondary); }
+        .lot-value, .pips-value { font-family: 'SF Mono', monospace; }
+        .money-value { font-family: 'SF Mono', monospace; font-weight: 600; }
+        .tp-value { color: var(--accent); }
+        .sl-value { color: var(--danger); }
+
+        .trade-outcome {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+        }
+        .trade-outcome.tp      { background: var(--accent-dim); color: var(--accent); }
+        .trade-outcome.sl      { background: var(--danger-dim); color: var(--danger); }
+        .trade-outcome.pending { background: var(--border); color: var(--text-secondary); }
+
+        .trade-actions { display: flex; gap: 6px; }
+        .trade-btn { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+        .trade-btn.tp-btn { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); }
+        .trade-btn.tp-btn:hover { background: var(--accent); color: #000; }
+        .trade-btn.sl-btn { background: var(--danger-dim); color: var(--danger); border: 1px solid var(--danger); }
+        .trade-btn.sl-btn:hover { background: var(--danger); color: #fff; }
+        .trade-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* Right Panel */
+        .right-panel {
+            background: var(--surface); padding: 24px 20px;
+            display: flex; flex-direction: column; gap: 18px;
+            overflow-y: auto; max-height: 100vh;
+        }
+        .panel-section { background: var(--bg); border-radius: 10px; padding: 16px; border: 1px solid var(--border); }
+        .panel-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-secondary); margin-bottom: 12px; font-weight: 600; }
+        .summary-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+        .summary-row:last-child { border-bottom: none; }
+        .summary-row .label { color: var(--text-secondary); }
+        .summary-row .value { font-weight: 600; font-family: 'SF Mono', monospace; }
+
+        .disallineamento-box { padding: 10px; border-radius: 8px; margin-top: 8px; font-size: 12px; }
+        .disallineamento-box.positive { background: var(--danger-dim); color: var(--danger); border: 1px solid var(--danger); }
+        .disallineamento-box.negative { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); }
+        .disallineamento-box.neutral  { background: var(--border); color: var(--text-secondary); border: 1px solid var(--border-light); }
+
+        .final-result { text-align: center; padding: 20px; border-radius: 12px; margin-top: 8px; }
+        .final-result.big-win   { background: var(--accent-dim); border: 1px solid var(--accent); }
+        .final-result.small-win { background: var(--danger-dim); border: 1px solid var(--danger); }
+        .final-result h2 { font-size: 18px; margin-bottom: 8px; }
+        .final-result.big-win h2   { color: var(--accent); }
+        .final-result.small-win h2 { color: var(--danger); }
+        .final-result p { font-size: 13px; color: var(--text-secondary); }
+
+        .export-btn { width: 100%; margin-top: 4px; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+        .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.3; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(20,25,35,0.55); backdrop-filter: blur(2px);
+            display: none; align-items: center; justify-content: center; z-index: 1000;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 90%; max-width: 420px; }
+        .modal h3 { margin-bottom: 16px; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .modal-actions .btn { flex: 1; }
+
+        @media (max-width: 1300px) { .app-container { grid-template-columns: 280px 1fr; } .right-panel { display: none; } }
+        @media (max-width: 768px)  { .app-container { grid-template-columns: 1fr; } .sidebar { display: none; } }
+    </style>
+</head>
+<body>
+
+<!-- ── SPINNER ─────────────────────────────────────── -->
+<div id="spinner"><div class="spin-ring"></div></div>
+
+<!-- ── TOAST ──────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<div class="app-container" id="appContainer">
+    <!-- ══════════════ SIDEBAR ══════════════ -->
+    <aside class="sidebar">
+        <a href="/app" style="display:flex;align-items:center;gap:6px;color:var(--text);text-decoration:none;font-weight:600;margin-bottom:12px;">
+            ⬅ Dashboard
+        </a>
+        <div>
+            <div class="logo">FX <span>CYCLE</span></div>
+            <p style="font-size:11px;color:var(--text-secondary);margin-bottom:16px;">Motore deterministico — API Backend</p>
+        </div>
+
+        <!-- Active slot banner -->
+        <div class="active-slot-banner no-slot" id="activeSlotBanner">
+            <span>⚠ Nessuno slot attivo</span>
+            <button class="slot-safe" onclick="openCreateSlotModal()">+ Crea</button>
+        </div>
+
+        <!-- Parametri Principali -->
+        <div>
+            <div class="section-title">⚙️ Parametri Principali</div>
+            <div class="input-group">
+                <label>BIG Balance ($)</label>
+                <input type="number" id="bigBalance" value="3000" min="1" step="100">
+            </div>
+            <div class="input-group">
+                <label>SMALL Balance ($)</label>
+                <input type="number" id="smallBalance" value="1000" min="1" step="100">
+            </div>
+            <div class="input-group">
+                <label>Starting Pips</label>
+                <input type="number" id="startingPips" value="100" min="1" step="10">
+            </div>
+        </div>
+
+        <!-- Configurazione Ciclo -->
+        <div>
+            <div class="section-title">🔧 Configurazione Ciclo</div>
+            <div class="input-row">
+                <div class="input-group">
+                    <label>Numero Fasi</label>
+                    <input type="number" id="numPhases" value="3" min="1" max="10" step="1" onchange="updateFormulaPreview()">
+                </div>
+                <div class="input-group">
+                    <label>Trade per Fase</label>
+                    <input type="number" id="tradesPerPhase" value="4" min="1" max="10" step="1" onchange="updateFormulaPreview()">
+                </div>
+            </div>
+            <div class="formula-preview" style="margin-top:10px;">
+                <div style="margin-bottom:8px;color:var(--text);font-weight:600;">📐 Formule attive:</div>
+                <code>loss_teorica</code> = BIG / <span class="highlight" id="fpPhases">3</span><br>
+                <code>tp_value</code> = recovery / <span class="highlight" id="fpTrades">4</span><br>
+                <code>recovery_n</code> = SMALL + Σ(loss precedenti)<br>
+                <code>lot</code> = tp_value / (pips × 10) ≥ 0.01
+            </div>
+            <div class="win-conditions">
+                <strong>🏆 Vittoria BIG:</strong> <span id="wcTP">4</span> TP consecutivi<br>
+                <span class="small-win-cond"><strong>🛡️ Vittoria SMALL:</strong> 1 SL in ogni fase</span>
+            </div>
+        </div>
+
+        <!-- Strategia Ciclo -->
+        <div>
+            <div class="section-title">📈 Strategia Ciclo</div>
+            <div class="input-group">
+                <label>Nome EA <span style="font-size:10px;color:var(--text-secondary);">(personalizzato)</span></label>
+                <input type="text" id="stratEAName" value="Cycle_EA_Premium" placeholder="Es. MyAccount_Gold_01" oninput="updateEANamePreview()">
+                <div id="eaNamePreview" style="font-size:11px;margin-top:4px;color:var(--text-secondary);min-height:14px;"></div>
+            </div>
+            <div class="input-group" style="flex-direction:row;align-items:center;justify-content:space-between;padding:6px 0;">
+                <label style="flex:1;margin:0;">Usa nome come commento trade</label>
+                <label class="switch"><input type="checkbox" id="stratUseNameComment" checked><span class="slider-switch"></span></label>
+            </div>
+            <div class="input-group">
+                <label>Timeframe Strategia</label>
+                <select id="stratSignalTF">
+                    <option value="1">M1</option><option value="2">M2</option><option value="3">M3</option>
+                    <option value="4">M4</option><option value="5" selected>M5</option><option value="6">M6</option>
+                    <option value="10">M10</option><option value="15">M15</option><option value="30">M30</option>
+                    <option value="16385">H1</option><option value="16386">H2</option><option value="16388">H4</option>
+                    <option value="16390">H6</option><option value="16392">H8</option><option value="16396">H12</option>
+                    <option value="16408">D1</option><option value="32769">W1</option><option value="49153">MN1</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label>Periodo EMA</label>
+                <input type="number" id="stratEmaPeriod" value="200" min="1" step="1">
+            </div>
+            <div class="input-group">
+                <label>Periodo Bollinger Bands</label>
+                <input type="number" id="stratBBPeriod" value="20" min="1" step="1">
+            </div>
+            <div class="input-group">
+                <label>Deviazione Bollinger Bands</label>
+                <input type="number" id="stratBBDeviation" value="2.0" min="0.1" step="0.1">
+            </div>
+            <div class="input-group" style="flex-direction:row;align-items:center;justify-content:space-between;padding:6px 0;">
+                <label style="flex:1;margin:0;">Richiedi candela chiusa</label>
+                <label class="switch"><input type="checkbox" id="stratClosedCandle" checked><span class="slider-switch"></span></label>
+            </div>
+            <div class="input-group" style="flex-direction:row;align-items:center;justify-content:space-between;padding:6px 0;">
+                <label style="flex:1;margin:0;">Richiedi chiusura dentro BB</label>
+                <label class="switch"><input type="checkbox" id="stratCloseInsideBB" checked><span class="slider-switch"></span></label>
+            </div>
+        </div>
+
+        <!-- Loss Reali (dynamic) -->
+        <div>
+            <div class="section-title">📉 Disallineamenti (Loss Reali)</div>
+            <div id="lossInputsContainer"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="calculateCycle()" style="flex:1.5;">Calcola Ciclo</button>
+            <button class="btn btn-secondary" onclick="resetInputs()" style="flex:1;">Reset</button>
+        </div>
+
+        <!-- Slots -->
+        <div class="slots-section">
+            <div class="section-title">💾 Slot Salvati</div>
+            <div id="slotsList"></div>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <button class="btn btn-sm btn-secondary slot-safe" onclick="saveSlot()" style="flex:1;">Salva</button>
+                <button class="btn btn-sm btn-secondary slot-safe" onclick="openCreateSlotModal()" style="flex:1;">+ Nuovo</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ══════════════ MAIN ══════════════ -->
+    <main class="main-content">
+        <div id="noSlotEmptyState" style="display:none;background:var(--surface);border:2px dashed var(--warning);border-radius:12px;padding:40px 30px;text-align:center;margin-bottom:16px;">
+            <div style="font-size:48px;margin-bottom:12px;">📂</div>
+            <h2 style="color:var(--text);margin-bottom:8px;">Nessuno slot attivo</h2>
+            <p style="color:var(--text-secondary);margin-bottom:20px;font-size:13px;">
+                Per iniziare a usare il calcolatore devi prima creare uno slot.<br>
+                Tutte le modifiche (parametri, strategia, esiti TP/SL) verranno salvate nello slot attivo.
+            </p>
+            <button class="btn slot-safe" onclick="openCreateSlotModal()" style="padding:12px 24px;">+ Crea Nuovo Slot</button>
+        </div>
+
+        <div class="main-header">
+            <div>
+                <h1>Ciclo Operativo</h1>
+                <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;" id="configChips"></div>
+            </div>
+            <div id="cycleStatus"><span class="status-badge active">In attesa</span></div>
+        </div>
+
+        <div id="phasesContainer" class="phases-container">
+            <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                </svg>
+                <p>Inserisci i parametri, configura fasi e trade, poi clicca <strong>Calcola Ciclo</strong></p>
+            </div>
+        </div>
+    </main>
+
+    <!-- ══════════════ RIGHT PANEL ══════════════ -->
+    <aside class="right-panel">
+        <div class="panel-section">
+            <h3>Riepilogo Parametri</h3>
+            <div class="summary-row"><span class="label">BIG Balance</span><span class="value" id="summaryBig">-</span></div>
+            <div class="summary-row"><span class="label">SMALL Balance</span><span class="value" id="summarySmall">-</span></div>
+            <div class="summary-row"><span class="label">Starting Pips</span><span class="value" id="summaryPips">-</span></div>
+            <div class="summary-row"><span class="label">Fasi Configurate</span><span class="value" id="summaryPhases">-</span></div>
+            <div class="summary-row"><span class="label">Trade per Fase</span><span class="value" id="summaryTrades">-</span></div>
+            <div class="summary-row"><span class="label">Loss Teorica</span><span class="value" id="summaryTheoretical">-</span></div>
+        </div>
+
+        <div class="panel-section">
+            <h3>Disallineamenti</h3>
+            <div id="disallineamentiContainer"><p style="color:var(--text-secondary);font-size:13px;">Nessun dato</p></div>
+        </div>
+
+        <div class="panel-section">
+            <h3>Stato Ciclo</h3>
+            <div class="summary-row"><span class="label">Fase Attiva</span><span class="value" id="activePhase">-</span></div>
+            <div class="summary-row"><span class="label">Trade Corrente</span><span class="value" id="currentTrade">-</span></div>
+            <div class="summary-row"><span class="label">TP Consecutivi</span><span class="value" id="consecutiveTPs">-</span></div>
+            <div class="summary-row"><span class="label">SL Totali</span><span class="value" id="totalSLs">-</span></div>
+        </div>
+
+        <div class="panel-section" id="finalResultSection" style="display:none;">
+            <h3>Risultato Finale</h3>
+            <div id="finalResultBox"></div>
+        </div>
+
+        <button class="btn export-btn" onclick="exportPDF()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:6px;">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Esporta PDF
+        </button>
+        <button class="btn export-btn" onclick="exportSetFile()" style="margin-top:8px;background:var(--info);color:#fff;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:6px;">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Esporta SetFile (MT5)
+        </button>
+        <button class="btn export-btn" onclick="downloadCustomEA()" style="margin-top:8px;background:var(--warning);color:#fff;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:6px;">
+                <path d="M12 3v12"/><polyline points="6 9 12 15 18 9"/><rect x="3" y="17" width="18" height="4" rx="1"/>
+            </svg>
+            Scarica Expert Advisor
+        </button>
+    </aside>
+</div>
+
+<!-- ══════ MODALS ══════ -->
+<!-- Create Slot -->
+<div class="modal-overlay" id="createSlotModal">
+    <div class="modal">
+        <h3>📂 Crea Nuovo Slot</h3>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">
+            Dai un nome al tuo slot. Tutte le configurazioni e gli esiti TP/SL verranno salvate qui.
+        </p>
+        <div class="input-group">
+            <label>Nome Slot</label>
+            <input type="text" id="newSlotName" placeholder="Es. Gold Strategy v1" onkeydown="if(event.key==='Enter')confirmCreateEmptySlot()">
+        </div>
+        <div class="modal-actions">
+            <button class="btn slot-safe" onclick="confirmCreateEmptySlot()">Crea e Inizia</button>
+            <button class="btn btn-secondary slot-safe" onclick="closeModal('createSlotModal')">Annulla</button>
+        </div>
+    </div>
+</div>
+
+<!-- Save / Overwrite Slot -->
+<div class="modal-overlay" id="overwriteSlotModal">
+    <div class="modal">
+        <h3>💾 Salvare modifiche</h3>
+        <p style="font-size:13px;color:var(--text);margin-bottom:8px;">
+            Stai modificando lo slot <strong id="overwriteSlotName" style="color:var(--accent);">—</strong>.<br>
+            Cosa vuoi fare?
+        </p>
+        <div class="modal-actions" style="flex-direction:column;gap:8px;">
+            <button class="btn slot-safe" onclick="confirmOverwriteSlot('update')" style="width:100%;">Aggiorna slot corrente</button>
+            <button class="btn slot-safe" onclick="openCreateSlotModal()" style="width:100%;background:var(--info);color:#fff;">Crea nuovo slot</button>
+            <button class="btn btn-secondary slot-safe" onclick="closeModal('overwriteSlotModal')" style="width:100%;">Annulla</button>
+        </div>
+    </div>
+</div>
+
+<!-- EA source template (used by downloadCustomEA) -->
+<script type="text/plain" id="eaSourceTemplate">//+------------------------------------------------------------------+
+//|                                         Cycle_EA_Premium_New.mq5 |
+//|                                 Copyright 2026, Fix APi rustyfx. |
+//|                                                      HedgeBridge |
+//+------------------------------------------------------------------+
+#property description "Dynamical API @rustyfx Claude."
+#property copyright "HedgeBridge"
+#property description "Opus 4.7 x Hakimi"
+#property version   "4.0"
+#property strict
+#property description "Cycle EA Premium is a 3 Phase cycle EA based on EMA200 + Bollinger Bands"
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+//====================================================
+// ENUMS
+//====================================================
+enum EnumCycleState
+  {
+   CYCLE_ACTIVE=0,
+   CYCLE_COMPLETED=1,
+   CYCLE_TERMINATED=2,
+   CYCLE_WAITING_RESTART=3
+  };
+
+enum EnumLastTradeResult
+  {
+   RESULT_NONE=0,
+   RESULT_TP=1,
+   RESULT_SL=2,
+   RESULT_MANUAL=3
+  };
+
+//====================================================
+// INPUTS
+//====================================================
+input group "===== GENERAL SETTINGS ====="
+input string   EA_DisplayName            = "Cycle_EA_Premium"; //Custom display name for logs, dashboard and trade comments
+input bool     UseDisplayNameAsComment   = true;   //Use EA_DisplayName as trade order comment
+input double   Phase1_LotSize = 0.10; //Lot size for phase 1
+input double   Phase2_LotSize = 0.10; //Lot size for phase 2
+input double   Phase3_LotSize = 0.10; //Lot size for phase 3
+input long     MagicNumber               = 26032501; //Unique magic number to identify EA trades
+input int      SlippagePoints            = 20;     //Maximum allowed slippage in points
+input bool     UseStatePersistenceGV     = true;   //Save EA state using Global Variables (retain after restart)
+input bool     OneTradeAtATime           = true;   //Allow only one active trade at a time
+input bool     AutoRestartCompletedCycle = false;  //Restart cycle automatically after successful completion
+input bool     AutoRestartTerminatedCycle= false;  //Restart cycle automatically after termination (phase 3 SL)
+input bool     ShowDashboard             = true;   //Display dashboard on chart
+input bool     PrintStateChanges         = true;   //Print cycle/phase changes in expert log
+input int StopCycleAtTPStep = 10; //Stop cycle when this TP step is reached (1..10)
+
+input group "===== PHASE 1 SETTINGS ====="
+input double   Phase1_TP1_Pips = 20.0; //Take Profit 1 in pips for phase 1
+input double   Phase1_TP2_Pips = 20.0; //Take Profit 2 in pips for phase 1
+input double   Phase1_TP3_Pips = 20.0; //Take Profit 3 in pips for phase 1
+input double   Phase1_TP4_Pips = 20.0; //Take Profit 4 in pips for phase 1
+input double   Phase1_TP5_Pips  = 20.0; //Take Profit 5 in pips for phase 1
+input double   Phase1_TP6_Pips  = 20.0; //Take Profit 6 in pips for phase 1
+input double   Phase1_TP7_Pips  = 20.0; //Take Profit 7 in pips for phase 1
+input double   Phase1_TP8_Pips  = 20.0; //Take Profit 8 in pips for phase 1
+input double   Phase1_TP9_Pips  = 20.0; //Take Profit 9 in pips for phase 1
+input double   Phase1_TP10_Pips = 20.0; //Take Profit 10 in pips for phase 1
+input double   Phase1_SL1_Pips = 30.0; //Stop Loss 1 in pips for phase 1
+input double   Phase1_SL2_Pips = 30.0; //Stop Loss 2 in pips for phase 1
+input double   Phase1_SL3_Pips = 30.0; //Stop Loss 3 in pips for phase 1
+input double   Phase1_SL4_Pips = 30.0; //Stop Loss 4 in pips for phase 1
+input double   Phase1_SL5_Pips  = 30.0; //Stop Loss 5 in pips for phase 1
+input double   Phase1_SL6_Pips  = 30.0; //Stop Loss 6 in pips for phase 1
+input double   Phase1_SL7_Pips  = 30.0; //Stop Loss 7 in pips for phase 1
+input double   Phase1_SL8_Pips  = 30.0; //Stop Loss 8 in pips for phase 1
+input double   Phase1_SL9_Pips  = 30.0; //Stop Loss 9 in pips for phase 1
+input double   Phase1_SL10_Pips = 30.0; //Stop Loss 10 in pips for phase 1
+input group "===== PHASE 2 SETTINGS ====="
+input double   Phase2_TP1_Pips = 20.0; //Take Profit 1 in pips for phase 2
+input double   Phase2_TP2_Pips = 20.0; //Take Profit 2 in pips for phase 2
+input double   Phase2_TP3_Pips = 20.0; //Take Profit 3 in pips for phase 2
+input double   Phase2_TP4_Pips = 20.0; //Take Profit 4 in pips for phase 2
+input double   Phase2_TP5_Pips  = 20.0; //Take Profit 5 in pips for phase 2
+input double   Phase2_TP6_Pips  = 20.0; //Take Profit 6 in pips for phase 2
+input double   Phase2_TP7_Pips  = 20.0; //Take Profit 7 in pips for phase 2
+input double   Phase2_TP8_Pips  = 20.0; //Take Profit 8 in pips for phase 2
+input double   Phase2_TP9_Pips  = 20.0; //Take Profit 9 in pips for phase 2
+input double   Phase2_TP10_Pips = 20.0; //Take Profit 10 in pips for phase 2
+input double   Phase2_SL1_Pips = 30.0; //Stop Loss 1 in pips for phase 2
+input double   Phase2_SL2_Pips = 30.0; //Stop Loss 2 in pips for phase 2
+input double   Phase2_SL3_Pips = 30.0; //Stop Loss 3 in pips for phase 2
+input double   Phase2_SL4_Pips = 30.0; //Stop Loss 4 in pips for phase 2
+input double   Phase2_SL5_Pips  = 30.0; //Stop Loss 5 in pips for phase 2
+input double   Phase2_SL6_Pips  = 30.0; //Stop Loss 6 in pips for phase 2
+input double   Phase2_SL7_Pips  = 30.0; //Stop Loss 7 in pips for phase 2
+input double   Phase2_SL8_Pips  = 30.0; //Stop Loss 8 in pips for phase 2
+input double   Phase2_SL9_Pips  = 30.0; //Stop Loss 9 in pips for phase 2
+input double   Phase2_SL10_Pips = 30.0; //Stop Loss 10 in pips for phase 2
+input group "===== PHASE 3 SETTINGS ====="
+input double   Phase3_TP1_Pips = 20.0; //Take Profit 1 in pips for phase 3
+input double   Phase3_TP2_Pips = 20.0; //Take Profit 2 in pips for phase 3
+input double   Phase3_TP3_Pips = 20.0; //Take Profit 3 in pips for phase 3
+input double   Phase3_TP4_Pips = 20.0; //Take Profit 4 in pips for phase 3
+input double   Phase3_TP5_Pips  = 20.0; //Take Profit 5 in pips for phase 3
+input double   Phase3_TP6_Pips  = 20.0; //Take Profit 6 in pips for phase 3
+input double   Phase3_TP7_Pips  = 20.0; //Take Profit 7 in pips for phase 3
+input double   Phase3_TP8_Pips  = 20.0; //Take Profit 8 in pips for phase 3
+input double   Phase3_TP9_Pips  = 20.0; //Take Profit 9 in pips for phase 3
+input double   Phase3_TP10_Pips = 20.0; //Take Profit 10 in pips for phase 3
+input double   Phase3_SL1_Pips = 30.0; //Stop Loss 1 in pips for phase 3
+input double   Phase3_SL2_Pips = 30.0; //Stop Loss 2 in pips for phase 3
+input double   Phase3_SL3_Pips = 30.0; //Stop Loss 3 in pips for phase 3
+input double   Phase3_SL4_Pips = 30.0; //Stop Loss 4 in pips for phase 3
+input double   Phase3_SL5_Pips  = 30.0; //Stop Loss 5 in pips for phase 3
+input double   Phase3_SL6_Pips  = 30.0; //Stop Loss 6 in pips for phase 3
+input double   Phase3_SL7_Pips  = 30.0; //Stop Loss 7 in pips for phase 3
+input double   Phase3_SL8_Pips  = 30.0; //Stop Loss 8 in pips for phase 3
+input double   Phase3_SL9_Pips  = 30.0; //Stop Loss 9 in pips for phase 3
+input double   Phase3_SL10_Pips = 30.0; //Stop Loss 10 in pips for phase 3
+
+input group "===== STRATEGY SETTINGS ====="
+input ENUM_TIMEFRAMES SignalTF           = PERIOD_M5; //Timeframe used for signal generation
+input int      EmaPeriod                 = 200;   //EMA period used as trend filter
+input int      BB_Period                 = 20;    //Bollinger Bands period
+input double   BB_Deviation              = 2.0;   //Bollinger Bands deviation
+input bool     RequireClosedCandleTouch  = true;  //Require BB touch on closed candle only
+input bool     RequireCloseBackInsideBB  = false; //Require candle to close back inside bands after touch
+input int      MaxSpreadPoints           = 250;   //Maximum allowed spread in points to open trade
+input bool     NewBarOnly                = true;  //Execute logic only on new candle
+
+input group "===== FILTERS ====="
+input bool     UseTimeFilter             = true;  //Enable trading within specific hours only
+input int      StartHour                 = 7;     //Trading start hour (broker time)
+input int      EndHour                   = 20;    //Trading end hour (broker time)
+input bool     OneTradePerDay            = false; //Allow only one trade per day
+
+input group "===== DASHBOARD / BUTTON ====="
+input bool     ShowResetButton           = true;  //Show manual reset button on chart
+input int      ResetButtonX              = 170;   //Reset button X position (pixels from left)
+input int      ResetButtonY              = 18;    //Reset button Y position (pixels from top)
+
+//====================================================
+// GLOBALS
+//====================================================
+int g_phaseIndex = 1;
+int g_phaseStep  = 1;
+int g_consecutiveTP = 0;
+EnumCycleState    g_cycleState             = CYCLE_ACTIVE;
+EnumLastTradeResult g_lastTradeResult      = RESULT_NONE;
+datetime          g_lastBarTime            = 0;
+datetime          g_lastHistoryScan        = 0;
+ulong             g_lastProcessedDeal      = 0;
+int               g_lastTradeDayKey        = 0;
+bool              g_initialized            = false;
+
+int               hEMA                     = INVALID_HANDLE;
+int               hBands                   = INVALID_HANDLE;
+
+string            BTN_RESET_NAME           = "BTN_RESET_CYCLE_PREMIUM";
+int g_stopCycleAtTPStep = 10;
+string            StatePrefix              = ""; // Derived from EA_DisplayName in OnInit
+//====================================================
+// EA OnInit
+//====================================================
+int OnInit()
+  {
+   // Derive StatePrefix from custom display name (sanitize spaces for GV key safety)
+   StatePrefix = EA_DisplayName;
+   StringReplace(StatePrefix, " ", "_");
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   LoadState();
+
+   g_stopCycleAtTPStep = StopCycleAtTPStep;
+   if(g_stopCycleAtTPStep < 1 || g_stopCycleAtTPStep > 10)
+     {
+      g_stopCycleAtTPStep = 10;
+      LogMsg("Invalid StopCycleAtTPStep input, fallback to 10");
+     }
+
+   if(!CreateIndicators())
+      return INIT_FAILED;
+
+   if(g_lastHistoryScan<=0)
+      g_lastHistoryScan=TimeCurrent()-10;
+
+   if(ShowResetButton)
+      CreateResetButton();
+
+   g_initialized=true;
+   SaveState();
+   UpdateDashboard();
+   LogMsg("Initialized successfully");
+   return INIT_SUCCEEDED;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+   SaveState();
+   ReleaseIndicators();
+   DeleteResetButton();
+   if(ShowDashboard)
+      Comment("");
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   if(!g_initialized)
+      return;
+
+   ScanClosedDeals();
+
+   bool canCheck=true;
+   if(NewBarOnly)
+      canCheck=IsNewBar(SignalTF);
+
+   if(canCheck && !PositionExistsByMagic())
+     {
+      int signal=GetEntrySignal();
+      if(signal!=0)
+         PlaceTrade(signal);
+     }
+
+   if(!MQLInfoInteger(MQL_TESTER))
+      UpdateDashboard();
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+  {
+   if(!MQLInfoInteger(MQL_TESTER))
+      UpdateDashboard();
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+   if(id==CHARTEVENT_OBJECT_CLICK && sparam==BTN_RESET_NAME)
+     {
+      ObjectSetInteger(ChartID(),sparam,OBJPROP_STATE,false);
+      ManualResetCycle();
+     }
+  }
+//====================================================
+// HELPERS
+//====================================================
+string GVKey(const string suffix)
+  {
+   return StatePrefix + "_" + IntegerToString((int)MagicNumber) + "_" + suffix;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void LogMsg(const string msg)
+  {
+   if(PrintStateChanges)
+      Print("[",EA_DisplayName,"] ",msg);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int TodayKey()
+  {
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(),dt);
+   return dt.year*10000 + dt.mon*100 + dt.day;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool IsNewBar(const ENUM_TIMEFRAMES tf)
+  {
+   datetime t=iTime(_Symbol,tf,0);
+   if(t<=0)
+      return false;
+   if(t!=g_lastBarTime)
+     {
+      g_lastBarTime=t;
+      return true;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool PassesTimeFilter()
+  {
+   if(!UseTimeFilter)
+      return true;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(),dt);
+
+   if(StartHour<=EndHour)
+      return (dt.hour>=StartHour && dt.hour<EndHour);
+
+   return (dt.hour>=StartHour || dt.hour<EndHour);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int CurrentSpreadPoints()
+  {
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(ask<=0 || bid<=0)
+      return 0;
+   return (int)MathRound((ask-bid)/_Point);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool PositionExistsByMagic()
+  {
+   for(int i=PositionsTotal()-1;i>=0;--i)
+     {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || !PositionSelectByTicket(ticket))
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC)!=MagicNumber)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol)
+         continue;
+      return true;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool GetCurrentPosition(ulong &ticket,ENUM_POSITION_TYPE &type,double &openPrice,double &sl,double &tp)
+  {
+   for(int i=PositionsTotal()-1;i>=0;--i)
+     {
+      ulong t=PositionGetTicket(i);
+      if(t==0 || !PositionSelectByTicket(t))
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC)!=MagicNumber)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol)
+         continue;
+
+      ticket=t;
+      type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      openPrice=PositionGetDouble(POSITION_PRICE_OPEN);
+      sl=PositionGetDouble(POSITION_SL);
+      tp=PositionGetDouble(POSITION_TP);
+      return true;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int TradesOpenedToday()
+  {
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(),dt);
+   dt.hour=0;
+   dt.min=0;
+   dt.sec=0;
+   datetime dayStart=StructToTime(dt);
+
+   if(!HistorySelect(dayStart,TimeCurrent()))
+      return 0;
+
+   int count=0;
+   int total=HistoryDealsTotal();
+   for(int i=0;i<total;++i)
+     {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0)
+         continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=MagicNumber)
+         continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+         continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+         count++;
+     }
+   return count;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool NormalizeLots(double &lots)
+  {
+   double minLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   double maxLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   if(step<=0.0)
+      step=0.01;
+
+   lots=MathMax(minLot,MathMin(maxLot,lots));
+   lots=MathFloor(lots/step)*step;
+
+   int digits=2;
+   if(step==1.0)
+      digits=0;
+   else
+      if(step==0.1)
+         digits=1;
+      else
+         if(step==0.01)
+            digits=2;
+         else
+            if(step==0.001)
+               digits=3;
+
+   lots=NormalizeDouble(lots,digits);
+   return (lots>=minLot && lots<=maxLot);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool PipsToPriceDistance(const double pips,double &distance)
+  {
+   if(pips<=0.0)
+      return false;
+
+   double pipSize=((_Digits==3 || _Digits==5) ? 10.0*_Point : _Point);
+   distance=pips*pipSize;
+   return (distance>0.0);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool GetPhaseTargets(const int phaseIndex,const int step,double &tpPips,double &slPips)
+  {
+   if(step < 1 || step > 10)
+      return false;
+
+   double rawTP = GetCurrentTPInputPips(phaseIndex, step);
+   double rawSL = GetCurrentSLInputPips(phaseIndex, step);
+
+   if(rawTP <= 0.0 || rawSL <= 0.0)
+      return false;
+
+   tpPips = GetScaledPips(rawTP, _Symbol);
+   slPips = GetScaledPips(rawSL, _Symbol);
+
+   return (tpPips > 0.0 && slPips > 0.0);
+  }
+//+------------------------------------------------------------------+
+bool BuildTradePrices(const bool isBuy,const double tpPips,const double slPips,double &slPrice,double &tpPrice)
+  {
+   double tpDistance=0.0,slDistance=0.0;
+   if(!PipsToPriceDistance(tpPips,tpDistance) || !PipsToPriceDistance(slPips,slDistance))
+      return false;
+
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double price=(isBuy ? ask : bid);
+   if(price<=0.0)
+      return false;
+
+   int stopsLevelPts=(int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopDistance=MathMax((double)stopsLevelPts*_Point,_Point);
+   if(tpDistance<minStopDistance)
+      tpDistance=minStopDistance;
+   if(slDistance<minStopDistance)
+      slDistance=minStopDistance;
+
+   if(isBuy)
+     {
+      slPrice=NormalizeDouble(price-slDistance,_Digits);
+      tpPrice=NormalizeDouble(price+tpDistance,_Digits);
+     }
+   else
+     {
+      slPrice=NormalizeDouble(price+slDistance,_Digits);
+      tpPrice=NormalizeDouble(price-tpDistance,_Digits);
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+string CycleStateName()
+  {
+   switch(g_cycleState)
+     {
+      case CYCLE_ACTIVE:
+         return "Active";
+      case CYCLE_COMPLETED:
+         return "Completed";
+      case CYCLE_TERMINATED:
+         return "Terminated";
+      case CYCLE_WAITING_RESTART:
+         return "Waiting Restart";
+     }
+   return "Unknown";
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+string LastTradeResultName()
+  {
+   switch(g_lastTradeResult)
+     {
+      case RESULT_NONE:
+         return "None";
+      case RESULT_TP:
+         return "TP";
+      case RESULT_SL:
+         return "SL";
+      case RESULT_MANUAL:
+         return "Manual/Other";
+     }
+   return "Unknown";
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void ResetCycle(const string reason)
+  {
+   g_phaseIndex      = 1;
+   g_phaseStep       = 1;
+   g_consecutiveTP   = 0;
+   g_cycleState      = CYCLE_ACTIVE;
+   g_lastTradeResult = RESULT_NONE;
+   g_lastTradeDayKey = 0;
+   LogMsg("Cycle reset | reason=" + reason);
+  }
+//+------------------------------------------------------------------+
+void MarkCycleCompleted(const string reason)
+  {
+   g_cycleState=CYCLE_COMPLETED;
+   LogMsg("Cycle completed | reason="+reason);
+   if(AutoRestartCompletedCycle)
+      ResetCycle("Auto restart after completed cycle");
+   else
+      g_cycleState=CYCLE_WAITING_RESTART;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void MarkCycleTerminated(const string reason)
+  {
+   g_cycleState=CYCLE_TERMINATED;
+   LogMsg("Cycle terminated | reason="+reason);
+   if(AutoRestartTerminatedCycle)
+      ResetCycle("Auto restart after terminated cycle");
+   else
+      g_cycleState=CYCLE_WAITING_RESTART;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void SaveState()
+  {
+   if(!UseStatePersistenceGV)
+      return;
+
+   GlobalVariableSet(GVKey("Phase"),(double)g_phaseIndex);
+   GlobalVariableSet(GVKey("PhaseStep"),(double)g_phaseStep);
+   GlobalVariableSet(GVKey("ConsecutiveTP"),(double)g_consecutiveTP);
+   GlobalVariableSet(GVKey("CycleState"),(double)g_cycleState);
+   GlobalVariableSet(GVKey("LastResult"),(double)g_lastTradeResult);
+   GlobalVariableSet(GVKey("LastScan"),(double)g_lastHistoryScan);
+   GlobalVariableSet(GVKey("LastDeal"),(double)g_lastProcessedDeal);
+   GlobalVariableSet(GVKey("LastTradeDay"),(double)g_lastTradeDayKey);
+  }
+//+------------------------------------------------------------------+
+void LoadState()
+  {
+   if(!UseStatePersistenceGV || !GlobalVariableCheck(GVKey("Phase")))
+     {
+      ResetCycle("Fresh start");
+      g_lastHistoryScan=TimeCurrent()-10;
+      g_lastProcessedDeal=0;
+      return;
+     }
+
+   g_phaseIndex=(int)GlobalVariableGet(GVKey("Phase"));
+   g_phaseStep=(int)GlobalVariableGet(GVKey("PhaseStep"));
+   g_consecutiveTP=(int)GlobalVariableGet(GVKey("ConsecutiveTP"));
+   g_cycleState=(EnumCycleState)((int)GlobalVariableGet(GVKey("CycleState")));
+   g_lastTradeResult=(EnumLastTradeResult)((int)GlobalVariableGet(GVKey("LastResult")));
+   g_lastHistoryScan=(datetime)GlobalVariableGet(GVKey("LastScan"));
+   g_lastProcessedDeal=(ulong)GlobalVariableGet(GVKey("LastDeal"));
+   g_lastTradeDayKey=(int)GlobalVariableGet(GVKey("LastTradeDay"));
+
+   if(g_phaseIndex<1 || g_phaseIndex>3)
+      g_phaseIndex=1;
+   if(g_phaseStep<1 || g_phaseStep>10)
+      g_phaseStep=1;
+   if(g_consecutiveTP<0 || g_consecutiveTP>10)
+      g_consecutiveTP=0;
+   if(g_cycleState<CYCLE_ACTIVE || g_cycleState>CYCLE_WAITING_RESTART)
+      g_cycleState=CYCLE_ACTIVE;
+   if(g_lastTradeResult<RESULT_NONE || g_lastTradeResult>RESULT_MANUAL)
+      g_lastTradeResult=RESULT_NONE;
+   if(g_lastHistoryScan<=0)
+      g_lastHistoryScan=TimeCurrent()-10;
+  }
+
+//====================================================
+// SIGNALS
+//====================================================
+bool CopyOHLC(const int shiftStart,const int count,double &open[],double &high[],double &low[],double &close[])
+  {
+   ArraySetAsSeries(open,true);
+   ArraySetAsSeries(high,true);
+   ArraySetAsSeries(low,true);
+   ArraySetAsSeries(close,true);
+
+   if(CopyOpen(_Symbol,SignalTF,shiftStart,count,open)<count)
+      return false;
+   if(CopyHigh(_Symbol,SignalTF,shiftStart,count,high)<count)
+      return false;
+   if(CopyLow(_Symbol,SignalTF,shiftStart,count,low)<count)
+      return false;
+   if(CopyClose(_Symbol,SignalTF,shiftStart,count,close)<count)
+      return false;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int TrendDirection()
+  {
+   if(hEMA==INVALID_HANDLE)
+      return 0;
+
+   double ema[];
+   ArraySetAsSeries(ema,true);
+   if(CopyBuffer(hEMA,0,1,1,ema)<1)
+      return 0;
+
+   double close1=iClose(_Symbol,SignalTF,1);
+   if(close1<=0)
+      return 0;
+
+   if(close1>ema[0])
+      return 1;
+   if(close1<ema[0])
+      return -1;
+   return 0;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int GetEntrySignal()
+  {
+   if(g_cycleState==CYCLE_WAITING_RESTART)
+      return 0;
+   if(CurrentSpreadPoints()>MaxSpreadPoints)
+      return 0;
+   if(!PassesTimeFilter())
+      return 0;
+
+   if(hBands==INVALID_HANDLE || hEMA==INVALID_HANDLE)
+      return 0;
+
+   double upper[],middle[],lower[];
+   ArraySetAsSeries(upper,true);
+   ArraySetAsSeries(middle,true);
+   ArraySetAsSeries(lower,true);
+
+   if(CopyBuffer(hBands,0,1,3,middle)<3)
+      return 0;
+   if(CopyBuffer(hBands,1,1,3,upper)<3)
+      return 0;
+   if(CopyBuffer(hBands,2,1,3,lower)<3)
+      return 0;
+
+   double open[],high[],low[],close[];
+   int shiftStart=(RequireClosedCandleTouch ? 1 : 0);
+   if(!CopyOHLC(shiftStart,3,open,high,low,close))
+      return 0;
+
+   int trend=TrendDirection();
+   bool buySignal=false, sellSignal=false;
+
+   if(low[0]<=lower[0])
+     {
+      if(!RequireCloseBackInsideBB || close[0]>=lower[0])
+         buySignal=true;
+     }
+
+   if(high[0]>=upper[0])
+     {
+      if(!RequireCloseBackInsideBB || close[0]<=upper[0])
+         sellSignal=true;
+     }
+
+   if(buySignal && trend==1)
+      return 1;
+   if(sellSignal && trend==-1)
+      return -1;
+   return 0;
+  }
+
+//====================================================
+// TRADE / CYCLE LOGIC
+//====================================================
+bool CanOpenNewTrade()
+  {
+   if(g_cycleState==CYCLE_WAITING_RESTART)
+      return false;
+   if(OneTradeAtATime && PositionExistsByMagic())
+      return false;
+   if(OneTradePerDay && TradesOpenedToday()>=1)
+      return false;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool PlaceTrade(const int signal)
+  {
+   if(signal==0 || !CanOpenNewTrade())
+      return false;
+
+   double tpPips=0.0, slPips=0.0;
+   if(!GetPhaseTargets(g_phaseIndex,g_phaseStep,tpPips,slPips))
+      return false;
+
+   double lots = GetPhaseLotSize(g_phaseIndex);
+   if(!NormalizeLots(lots))
+      return false;
+
+   bool isBuy=(signal>0);
+   double sl=0.0,tp=0.0;
+   if(!BuildTradePrices(isBuy,tpPips,slPips,sl,tp))
+     {
+      LogMsg("Failed to build SL/TP prices");
+      return false;
+     }
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   bool ok=false;
+   string comment="";
+   if(UseDisplayNameAsComment)
+      comment=StringFormat("%s P%d Step#%d StopTP#%d",EA_DisplayName,g_phaseIndex,g_phaseStep,g_stopCycleAtTPStep);
+   else
+      comment=StringFormat("CycleEA P%d Step#%d StopTP#%d",g_phaseIndex,g_phaseStep,g_stopCycleAtTPStep);
+
+   if(isBuy)
+      ok=trade.Buy(lots,_Symbol,0.0,sl,tp,comment);
+   else
+      ok=trade.Sell(lots,_Symbol,0.0,sl,tp,comment);
+
+   if(!ok)
+     {
+      LogMsg("Order failed | retcode="+IntegerToString((int)trade.ResultRetcode())+" | "+trade.ResultRetcodeDescription());
+      return false;
+     }
+
+   g_lastTradeDayKey=TodayKey();
+   SaveState();
+
+   LogMsg(StringFormat("%s placed | phase=%d | step=%d | lots=%.2f | TP=%.1f pips | SL=%.1f pips",
+                       (isBuy?"BUY":"SELL"),g_phaseIndex,g_phaseStep,lots,tpPips,slPips));
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+void ProcessClosedTrade(const double netProfit,const string reason)
+  {
+   if(netProfit > 0.0)
+     {
+      g_lastTradeResult = RESULT_TP;
+      g_consecutiveTP   = g_phaseStep; // optional, only for display/logging
+
+      LogMsg("TP registered | phase=" + IntegerToString(g_phaseIndex) +
+             " | step=" + IntegerToString(g_phaseStep) + " | " + reason);
+
+      if(g_phaseStep >= g_stopCycleAtTPStep)
+        {
+         MarkCycleCompleted("Target TP step reached in phase " + IntegerToString(g_phaseIndex) +
+                            " | stop at TP step " + IntegerToString(g_stopCycleAtTPStep));
+         SaveState();
+         return;
+        }
+
+      if(g_phaseStep < 10)
+        {
+         g_phaseStep++;
+         LogMsg("Advanced to next step | phase=" + IntegerToString(g_phaseIndex) +
+                " | new step=" + IntegerToString(g_phaseStep));
+        }
+      else
+        {
+         MarkCycleCompleted("Maximum TP step reached in phase " + IntegerToString(g_phaseIndex));
+         SaveState();
+         return;
+        }
+     }
+   else
+      if(netProfit < 0.0)
+        {
+         g_lastTradeResult = RESULT_SL;
+         g_consecutiveTP   = 0;
+
+         LogMsg("SL registered | phase=" + IntegerToString(g_phaseIndex) +
+                " | step=" + IntegerToString(g_phaseStep) + " | " + reason);
+
+         if(g_phaseIndex == 1)
+           {
+            g_phaseIndex = 2;
+            g_phaseStep  = 1;
+            g_cycleState = CYCLE_ACTIVE;
+            LogMsg("Moved to phase 2 | reset step to 1");
+           }
+         else
+            if(g_phaseIndex == 2)
+              {
+               g_phaseIndex = 3;
+               g_phaseStep  = 1;
+               g_cycleState = CYCLE_ACTIVE;
+               LogMsg("Moved to phase 3 | reset step to 1");
+              }
+            else
+              {
+               MarkCycleTerminated("SL occurred in phase 3");
+               SaveState();
+               return;
+              }
+        }
+      else
+        {
+         g_lastTradeResult = RESULT_MANUAL;
+         LogMsg("Closed trade with zero/other result | " + reason);
+        }
+
+   SaveState();
+  }
+//+------------------------------------------------------------------+
+void ScanClosedDeals()
+  {
+   datetime toTime=TimeCurrent();
+   datetime fromTime=(g_lastHistoryScan>0 ? g_lastHistoryScan : (toTime-86400*30));
+
+   if(!HistorySelect(fromTime,toTime))
+      return;
+
+   datetime maxProcessedTime=g_lastHistoryScan;
+   int total=HistoryDealsTotal();
+
+   for(int i=0;i<total;++i)
+     {
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0)
+         continue;
+
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=MagicNumber)
+         continue;
+      if(HistoryDealGetString(deal,DEAL_SYMBOL)!=_Symbol)
+         continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_OUT)
+         continue;
+
+      datetime dealTime=(datetime)HistoryDealGetInteger(deal,DEAL_TIME);
+      if(dealTime<g_lastHistoryScan)
+         continue;
+      if(dealTime==g_lastHistoryScan && deal<=g_lastProcessedDeal)
+         continue;
+
+      double profit=HistoryDealGetDouble(deal,DEAL_PROFIT)
+                    + HistoryDealGetDouble(deal,DEAL_SWAP)
+                    + HistoryDealGetDouble(deal,DEAL_COMMISSION);
+
+      string reason=HistoryDealGetString(deal,DEAL_SYMBOL)+" deal#"+IntegerToString((int)deal);
+      ProcessClosedTrade(profit,reason);
+
+      if(dealTime>maxProcessedTime)
+        {
+         maxProcessedTime=dealTime;
+         g_lastProcessedDeal=deal;
+        }
+      else
+         if(dealTime==maxProcessedTime && deal>g_lastProcessedDeal)
+           {
+            g_lastProcessedDeal=deal;
+           }
+     }
+
+   g_lastHistoryScan=maxProcessedTime;
+   SaveState();
+  }
+
+//====================================================
+// DASHBOARD / UI
+//====================================================
+void UpdateDashboard()
+  {
+   if(!ShowDashboard)
+      return;
+
+   double nextTp=0.0,nextSl=0.0;
+   GetPhaseTargets(g_phaseIndex,g_phaseStep,nextTp,nextSl);
+
+   double currentLots = GetPhaseLotSize(g_phaseIndex);
+
+   int signal=GetEntrySignal();
+   string dir="NONE";
+   if(signal>0)
+      dir="BUY";
+   else
+      if(signal<0)
+         dir="SELL";
+
+   string txt="";
+   txt += "========== " + EA_DisplayName + " ==========" + "\n\n";
+   txt += "Symbol: " + _Symbol + "\n";
+   txt += "State: " + CycleStateName() + "\n";
+   txt += "Current Phase: " + IntegerToString(g_phaseIndex) + " / 3\n";
+   txt += "Current Step: " + IntegerToString(g_phaseStep) + " / 10\n";
+   txt += "Stop Cycle At TP Step: " + IntegerToString(g_stopCycleAtTPStep) + "\n";
+   txt += "Last Trade Result: " + LastTradeResultName() + "\n";
+   txt += "Current Phase Lot: " + DoubleToString(currentLots,2) + "\n";
+   txt += "Current Step TP: " + DoubleToString(nextTp,1) + " pips\n";
+   txt += "Current Step SL: " + DoubleToString(nextSl,1) + " pips\n";
+   txt += "Daily Trade Count: " + IntegerToString(TradesOpenedToday()) + "\n";
+   txt += "Time Filter: " + string(UseTimeFilter ? "ON" : "OFF") + "\n";
+   if(UseTimeFilter)
+      txt += "Trading Hours: " + IntegerToString(StartHour) + ":00 -> " + IntegerToString(EndHour) + ":00\n";
+   txt += "Current Trade Direction: " + dir + "\n";
+   txt += "Spread: " + IntegerToString(CurrentSpreadPoints()) + " pts\n";
+   txt += "Open Position: " + string(PositionExistsByMagic() ? "YES" : "NO") + "\n";
+   txt += "One Trade/Day: " + string(OneTradePerDay ? "ON" : "OFF") + "\n";
+
+   Comment(txt);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CreateResetButton()
+  {
+   if(!ShowResetButton)
+      return;
+
+   if(ObjectFind(0,BTN_RESET_NAME)>=0)
+      ObjectDelete(0,BTN_RESET_NAME);
+
+   if(!ObjectCreate(0,BTN_RESET_NAME,OBJ_BUTTON,0,0,0))
+     {
+      LogMsg("Failed to create reset button");
+      return;
+     }
+
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_ANCHOR,ANCHOR_RIGHT_UPPER);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_XDISTANCE,ResetButtonX);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_YDISTANCE,ResetButtonY);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_XSIZE,150);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_YSIZE,30);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_BGCOLOR,clrDarkSlateGray);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_COLOR,clrWhite);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_BORDER_COLOR,clrSilver);
+   ObjectSetInteger(0,BTN_RESET_NAME,OBJPROP_FONTSIZE,10);
+   ObjectSetString(0,BTN_RESET_NAME,OBJPROP_TEXT,"RESET CYCLE");
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void DeleteResetButton()
+  {
+   if(ObjectFind(0,BTN_RESET_NAME)>=0)
+      ObjectDelete(0,BTN_RESET_NAME);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void ManualResetCycle()
+  {
+   if(PositionExistsByMagic())
+     {
+      Alert("Cannot reset cycle while a position is open.");
+      LogMsg("Manual reset blocked because position is still open");
+      return;
+     }
+
+   ResetCycle("Manual button reset");
+   SaveState();
+   UpdateDashboard();
+  }
+
+//====================================================
+// INIT / DEINIT / EVENTS
+//====================================================
+bool CreateIndicators()
+  {
+   hEMA=iMA(_Symbol,SignalTF,EmaPeriod,0,MODE_EMA,PRICE_CLOSE);
+   hBands=iBands(_Symbol,SignalTF,BB_Period,0,BB_Deviation,PRICE_CLOSE);
+
+   if(hEMA==INVALID_HANDLE)
+     {
+      LogMsg("Failed to create EMA handle");
+      return false;
+     }
+   if(hBands==INVALID_HANDLE)
+     {
+      LogMsg("Failed to create Bollinger handle");
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void ReleaseIndicators()
+  {
+   if(hEMA!=INVALID_HANDLE)
+      IndicatorRelease(hEMA);
+   if(hBands!=INVALID_HANDLE)
+      IndicatorRelease(hBands);
+   hEMA=INVALID_HANDLE;
+   hBands=INVALID_HANDLE;
+  }
+//+------------------------------------------------------------------+
+double GetTP_SL_MultiplierBySymbol(string symbol)
+  {
+   string s = symbol;
+   StringToUpper(s);
+
+// Metals
+   if(StringFind(s, "XAU") >= 0 ||
+      StringFind(s, "XAG") >= 0 ||
+      StringFind(s, "GOLD") >= 0 ||
+      StringFind(s, "SILVER") >= 0)
+      return 10.0;
+
+// Indices / Crypto
+   if(StringFind(s, "NAS") >= 0  ||
+      StringFind(s, "US30") >= 0 ||
+      StringFind(s, "DJ") >= 0   ||
+      StringFind(s, "SPX") >= 0  ||
+      StringFind(s, "GER") >= 0  ||
+      StringFind(s, "UK") >= 0   ||
+      StringFind(s, "JP") >= 0   ||
+      StringFind(s, "BTC") >= 0  ||
+      StringFind(s, "ETH") >= 0  ||
+      StringFind(s, "LTC") >= 0  ||
+      StringFind(s, "XRP") >= 0  ||
+      StringFind(s, "ADA") >= 0  ||
+      StringFind(s, "SOL") >= 0)
+      return 100.0;
+
+// Default = Forex
+   return 1.0;
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetScaledPips(double inputPips, string symbol)
+  {
+   return inputPips * GetTP_SL_MultiplierBySymbol(symbol);
+  }
+//+------------------------------------------------------------------+
+double GetPhaseLotSize(int phase)
+  {
+   switch(phase)
+     {
+      case 1:
+         return Phase1_LotSize;
+      case 2:
+         return Phase2_LotSize;
+      case 3:
+         return Phase3_LotSize;
+     }
+   return Phase1_LotSize;
+  }
+//+------------------------------------------------------------------+
+double GetCurrentTPInputPips(int phase, int step)
+  {
+   if(phase == 1)
+     {
+      if(step == 1)
+         return Phase1_TP1_Pips;
+      if(step == 2)
+         return Phase1_TP2_Pips;
+      if(step == 3)
+         return Phase1_TP3_Pips;
+      if(step == 4)
+         return Phase1_TP4_Pips;
+      if(step == 5)
+         return Phase1_TP5_Pips;
+      if(step == 6)
+         return Phase1_TP6_Pips;
+      if(step == 7)
+         return Phase1_TP7_Pips;
+      if(step == 8)
+         return Phase1_TP8_Pips;
+      if(step == 9)
+         return Phase1_TP9_Pips;
+      if(step == 10)
+         return Phase1_TP10_Pips;
+     }
+
+   if(phase == 2)
+     {
+      if(step == 1)
+         return Phase2_TP1_Pips;
+      if(step == 2)
+         return Phase2_TP2_Pips;
+      if(step == 3)
+         return Phase2_TP3_Pips;
+      if(step == 4)
+         return Phase2_TP4_Pips;
+      if(step == 5)
+         return Phase2_TP5_Pips;
+      if(step == 6)
+         return Phase2_TP6_Pips;
+      if(step == 7)
+         return Phase2_TP7_Pips;
+      if(step == 8)
+         return Phase2_TP8_Pips;
+      if(step == 9)
+         return Phase2_TP9_Pips;
+      if(step == 10)
+         return Phase2_TP10_Pips;
+     }
+
+   if(phase == 3)
+     {
+      if(step == 1)
+         return Phase3_TP1_Pips;
+      if(step == 2)
+         return Phase3_TP2_Pips;
+      if(step == 3)
+         return Phase3_TP3_Pips;
+      if(step == 4)
+         return Phase3_TP4_Pips;
+      if(step == 5)
+         return Phase3_TP5_Pips;
+      if(step == 6)
+         return Phase3_TP6_Pips;
+      if(step == 7)
+         return Phase3_TP7_Pips;
+      if(step == 8)
+         return Phase3_TP8_Pips;
+      if(step == 9)
+         return Phase3_TP9_Pips;
+      if(step == 10)
+         return Phase3_TP10_Pips;
+     }
+
+   return 0.0;
+  }
+//+------------------------------------------------------------------+
+double GetCurrentSLInputPips(int phase, int step)
+  {
+   if(phase == 1)
+     {
+      if(step == 1)
+         return Phase1_SL1_Pips;
+      if(step == 2)
+         return Phase1_SL2_Pips;
+      if(step == 3)
+         return Phase1_SL3_Pips;
+      if(step == 4)
+         return Phase1_SL4_Pips;
+      if(step == 5)
+         return Phase1_SL5_Pips;
+      if(step == 6)
+         return Phase1_SL6_Pips;
+      if(step == 7)
+         return Phase1_SL7_Pips;
+      if(step == 8)
+         return Phase1_SL8_Pips;
+      if(step == 9)
+         return Phase1_SL9_Pips;
+      if(step == 10)
+         return Phase1_SL10_Pips;
+     }
+
+   if(phase == 2)
+     {
+      if(step == 1)
+         return Phase2_SL1_Pips;
+      if(step == 2)
+         return Phase2_SL2_Pips;
+      if(step == 3)
+         return Phase2_SL3_Pips;
+      if(step == 4)
+         return Phase2_SL4_Pips;
+      if(step == 5)
+         return Phase2_SL5_Pips;
+      if(step == 6)
+         return Phase2_SL6_Pips;
+      if(step == 7)
+         return Phase2_SL7_Pips;
+      if(step == 8)
+         return Phase2_SL8_Pips;
+      if(step == 9)
+         return Phase2_SL9_Pips;
+      if(step == 10)
+         return Phase2_SL10_Pips;
+     }
+
+   if(phase == 3)
+     {
+      if(step == 1)
+         return Phase3_SL1_Pips;
+      if(step == 2)
+         return Phase3_SL2_Pips;
+      if(step == 3)
+         return Phase3_SL3_Pips;
+      if(step == 4)
+         return Phase3_SL4_Pips;
+      if(step == 5)
+         return Phase3_SL5_Pips;
+      if(step == 6)
+         return Phase3_SL6_Pips;
+      if(step == 7)
+         return Phase3_SL7_Pips;
+      if(step == 8)
+         return Phase3_SL8_Pips;
+      if(step == 9)
+         return Phase3_SL9_Pips;
+      if(step == 10)
+         return Phase3_SL10_Pips;
+     }
+
+   return 0.0;
+  }
+//+------------------------------------------------------------------+
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+//  CONFIG  — change BASE_URL to match your FastAPI server
+// ════════════════════════════════════════════════════════════════
+const BASE_URL = '';   // ← your FastAPI origin
+
+// ── Auth token (set once on login; replace with your auth flow) ──
+// The token is read from localStorage so a login page can set it.
+// e.g.  localStorage.setItem('token', '<jwt>');
+function getToken() {
+    return localStorage.getItem("token") || '';
+}
+
+// ════════════════════════════════════════════════════════════════
+//  API LAYER  — thin wrappers around fetch
+// ════════════════════════════════════════════════════════════════
+async function apiFetch(path, options = {}) {
+    const token = getToken();
+    const res = await fetch(BASE_URL + path, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(options.headers || {}),
+        },
+    });
+    if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `HTTP ${res.status}`);
+    }
+    if (res.status === 204) return null;
+    return res.json();
+}
+
+const api = {
+    // Slots CRUD
+    listSlots:    ()               => apiFetch('/cycle/slots'),
+    createSlot:   (name)           => apiFetch('/cycle/slots',  { method:'POST', body: JSON.stringify({ name }) }),
+    getSlot:      (id)             => apiFetch(`/cycle/slots/${id}`),
+    savePayload:  (id, payload)    => apiFetch(`/cycle/slots/${id}/payload`, { method:'PUT',  body: JSON.stringify(payload) }),
+    calculate:    (id, overrides)  => apiFetch(`/cycle/slots/${id}/calculate`, { method:'POST', body: JSON.stringify(overrides || {}) }),
+    recordOutcome:(id, phaseIdx, tradeIdx, outcome) =>
+                                      apiFetch(`/cycle/slots/${id}/outcome`,  { method:'POST', body: JSON.stringify({ phase_idx: phaseIdx, trade_idx: tradeIdx, outcome }) }),
+    deleteSlot:   (id)             => apiFetch(`/cycle/slots/${id}`, { method:'DELETE' }),
+};
+
+// ════════════════════════════════════════════════════════════════
+//  CLIENT STATE  (mirrors the slot response; no localStorage)
+// ════════════════════════════════════════════════════════════════
+let activeSlotId   = null;   // DB id of the active slot (null = none)
+let activeSlotName = null;
+let cycleData      = null;   // last SlotOut response from the API
+let slotList       = [];     // array of SlotSummary from listSlots
+
+// ════════════════════════════════════════════════════════════════
+//  DERIVED STATE (computed from cycleData.cycle_state)
+// ════════════════════════════════════════════════════════════════
+function cs()          { return cycleData?.cycle_state || null; }
+function currentPhase(){ return cs()?.current_phase ?? 0; }
+function currentTrade(){ return cs()?.current_trade_index ?? 0; }
+function consTP()      { return cs()?.consecutive_tp_count ?? 0; }
+function slCount()     { return cs()?.sl_count ?? 0; }
+function winner()      { return cs()?.cycle_winner ?? null; }
+function tradesPerPhase(){ return cycleData?.trades_per_phase ?? 4; }
+function numPhases()   { return cycleData?.num_phases ?? 3; }
+
+// ════════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ════════════════════════════════════════════════════════════════
+function showSpinner(v) { document.getElementById('spinner').classList.toggle('show', v); }
+
+function toast(msg, type = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    document.getElementById('toast-container').appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// ════════════════════════════════════════════════════════════════
+//  FORMULA PREVIEW / LOSS INPUTS  (pure UI, no API)
+// ════════════════════════════════════════════════════════════════
+function updateFormulaPreview() {
+    const n = document.getElementById('numPhases').value || 3;
+    const t = document.getElementById('tradesPerPhase').value || 4;
+    document.getElementById('fpPhases').textContent = n;
+    document.getElementById('fpTrades').textContent = t;
+    document.getElementById('wcTP').textContent = t;
+    renderLossInputs();
+}
+
+function renderLossInputs() {
+    const n = parseInt(document.getElementById('numPhases').value) || 3;
+    const container = document.getElementById('lossInputsContainer');
+    // preserve existing values
+    const old = {};
+    for (let i = 0; i < 10; i++) {
+        const el = document.getElementById('phaseLoss_' + i);
+        if (el) old[i] = el.value;
+    }
+    let html = '';
+    for (let i = 0; i < n; i++) {
+        html += `<div class="input-group" style="margin-bottom:8px;">
+            <label>Fase ${i + 1} Loss Reale ($)</label>
+            <input type="number" id="phaseLoss_${i}" placeholder="Auto: BIG/${n}" step="10" value="${old[i] ?? ''}">
+        </div>`;
+    }
+    container.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  BUILD REQUEST PAYLOADS from the sidebar UI
+// ════════════════════════════════════════════════════════════════
+function buildPayload() {
+    const n = parseInt(document.getElementById('numPhases').value) || 3;
+    const losses = [];
+    for (let i = 0; i < n; i++) {
+        const el = document.getElementById('phaseLoss_' + i);
+        const v = el && el.value !== '' ? parseFloat(el.value) : null;
+        if (v !== null) losses.push(v);
+    }
+    return {
+        big_balance:       parseFloat(document.getElementById('bigBalance').value) || 3000,
+        small_balance:     parseFloat(document.getElementById('smallBalance').value) || 1000,
+        starting_pips:     parseInt(document.getElementById('startingPips').value) || 100,
+        num_phases:        n,
+        trades_per_phase:  parseInt(document.getElementById('tradesPerPhase').value) || 4,
+        losses:            losses,
+        strategy: {
+            ea_name:                 document.getElementById('stratEAName').value || 'Cycle_EA_Premium',
+            use_name_as_comment:     document.getElementById('stratUseNameComment').checked,
+            signal_tf:               document.getElementById('stratSignalTF').value,
+            ema_period:              parseInt(document.getElementById('stratEmaPeriod').value) || 200,
+            bb_period:               parseInt(document.getElementById('stratBBPeriod').value) || 20,
+            bb_deviation:            parseFloat(document.getElementById('stratBBDeviation').value) || 2.0,
+            require_closed_candle:   document.getElementById('stratClosedCandle').checked,
+            require_close_inside_bb: document.getElementById('stratCloseInsideBB').checked,
+        },
+    };
+}
+
+// ════════════════════════════════════════════════════════════════
+//  POPULATE SIDEBAR from a SlotOut response
+// ════════════════════════════════════════════════════════════════
+function populateSidebarFromSlot(slot) {
+    document.getElementById('bigBalance').value      = slot.big_balance;
+    document.getElementById('smallBalance').value    = slot.small_balance;
+    document.getElementById('startingPips').value   = slot.starting_pips;
+    document.getElementById('numPhases').value      = slot.num_phases;
+    document.getElementById('tradesPerPhase').value = slot.trades_per_phase;
+
+    if (slot.strategy) {
+        const s = slot.strategy;
+        document.getElementById('stratEAName').value              = s.ea_name || 'Cycle_EA_Premium';
+        document.getElementById('stratUseNameComment').checked    = s.use_name_as_comment !== false;
+        document.getElementById('stratSignalTF').value            = s.signal_tf || '5';
+        document.getElementById('stratEmaPeriod').value           = s.ema_period || 200;
+        document.getElementById('stratBBPeriod').value            = s.bb_period || 20;
+        document.getElementById('stratBBDeviation').value         = s.bb_deviation || 2.0;
+        document.getElementById('stratClosedCandle').checked      = s.require_closed_candle !== false;
+        document.getElementById('stratCloseInsideBB').checked     = s.require_close_inside_bb !== false;
+    }
+
+    updateFormulaPreview();
+    updateEANamePreview();
+
+    if (slot.losses) {
+        slot.losses.forEach((v, i) => {
+            const el = document.getElementById('phaseLoss_' + i);
+            if (el) el.value = v;
+        });
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SLOT LIST UI
+// ════════════════════════════════════════════════════════════════
+function renderSlotList() {
+    const list = document.getElementById('slotsList');
+    if (!slotList.length) {
+        list.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;">Nessuno slot salvato</p>';
+        return;
+    }
+    list.innerHTML = slotList.map(s => {
+        const isActive = s.id === activeSlotId;
+        const icon = s.has_data ? '📊' : '📂';
+        const empty = s.has_data ? '' : '<span style="font-size:10px;color:var(--text-secondary);margin-left:6px;">(vuoto)</span>';
+        return `
+        <div class="slot-item ${isActive ? 'active-slot' : ''} slot-safe" onclick="loadSlot(${s.id})">
+            <span>${icon} ${escapeHtml(s.name)}${empty}</span>
+            <div class="slot-actions slot-safe" onclick="event.stopPropagation()">
+                <button class="slot-btn slot-safe" onclick="loadSlot(${s.id})">${isActive ? 'Attivo' : 'Apri'}</button>
+                <button class="slot-btn slot-safe" onclick="deleteSlot(${s.id})" style="color:var(--danger);">Elimina</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ACTIVE SLOT BANNER + LOCK
+// ════════════════════════════════════════════════════════════════
+function updateSlotBanner() {
+    const banner      = document.getElementById('activeSlotBanner');
+    const emptyState  = document.getElementById('noSlotEmptyState');
+    const mainHeader  = document.querySelector('.main-header');
+    const phasesCont  = document.getElementById('phasesContainer');
+
+    if (!activeSlotId) {
+        banner.classList.add('no-slot');
+        banner.innerHTML = '<span>⚠ Nessuno slot attivo</span><button class="slot-safe" onclick="openCreateSlotModal()">+ Crea</button>';
+        if (emptyState)  emptyState.style.display  = 'block';
+        if (mainHeader)  mainHeader.style.display   = 'none';
+        if (phasesCont)  phasesCont.style.display   = 'none';
+        document.getElementById('appContainer').classList.add('locked');
+    } else {
+        banner.classList.remove('no-slot');
+        banner.innerHTML = `
+            <span>✓ Slot: <span class="slot-name-display">${escapeHtml(activeSlotName)}</span></span>
+            <button class="slot-safe" onclick="clearActiveSlot()">Chiudi</button>`;
+        if (emptyState)  emptyState.style.display  = 'none';
+        if (mainHeader)  mainHeader.style.display   = '';
+        if (phasesCont)  phasesCont.style.display   = '';
+        document.getElementById('appContainer').classList.remove('locked');
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  RENDER CYCLE PHASES from cycleData
+// ════════════════════════════════════════════════════════════════
+function renderCycle() {
+    const container = document.getElementById('phasesContainer');
+    if (!cycleData || !cycleData.phases?.length) {
+        container.innerHTML = `<div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+            </svg>
+            <p>Inserisci i parametri, configura fasi e trade, poi clicca <strong>Calcola Ciclo</strong></p>
+        </div>`;
+        return;
+    }
+
+    const w   = winner();
+    const cp  = currentPhase();
+    const ct  = currentTrade();
+    const tpp = tradesPerPhase();
+
+    container.innerHTML = cycleData.phases.map((phase, pIdx) => {
+        const isActive   = pIdx === cp && !w;
+        const isBigWon   = w === 'BIG'   && pIdx === cp;
+        const isSmallWon = w === 'SMALL'  && phase.trades.some(t => t.outcome === 'SL');
+
+        let cardClass = 'phase-card';
+        if (isActive)   cardClass += ' active-phase';
+        if (isBigWon)   cardClass += ' big-won';
+        if (isSmallWon) cardClass += ' small-won';
+
+        const dis     = phase.disallineamento;
+        const disSign = dis > 0 ? '+' : '';
+        const disColor = dis > 0 ? 'var(--danger)' : dis < 0 ? 'var(--accent)' : 'var(--text)';
+
+        const tradesHtml = phase.trades.map((trade, tIdx) => {
+            const isCurrent = pIdx === cp && tIdx === ct && !w;
+            const outcome   = trade.outcome;
+
+            let rowClass = '';
+            if (isCurrent)        rowClass = 'current-trade';
+            else if (outcome === 'TP') rowClass = 'tp-hit';
+            else if (outcome === 'SL') rowClass = 'sl-hit';
+
+            let badge = '<span class="trade-outcome pending">In attesa</span>';
+            if (outcome === 'TP') badge = '<span class="trade-outcome tp">TP Hit</span>';
+            if (outcome === 'SL') badge = '<span class="trade-outcome sl">SL Hit</span>';
+
+            const canAct = isCurrent && !w;
+            return `<tr class="${rowClass}">
+                <td><span class="trade-num">#${trade.num}</span></td>
+                <td><span class="lot-value">${trade.lot.toFixed(2)}</span></td>
+                <td><span class="pips-value tp-value">${trade.tp_pips}</span></td>
+                <td><span class="pips-value sl-value">${trade.sl_pips}</span></td>
+                <td><span class="money-value tp-value">$${trade.tp_money.toFixed(2)}</span></td>
+                <td><span class="money-value sl-value">$${trade.sl_money.toFixed(2)}</span></td>
+                <td>${badge}</td>
+                <td>
+                    <div class="trade-actions">
+                        <button class="trade-btn tp-btn" onclick="recordOutcome(${pIdx},${tIdx},'TP')" ${!canAct?'disabled':''}>TP</button>
+                        <button class="trade-btn sl-btn" onclick="recordOutcome(${pIdx},${tIdx},'SL')" ${!canAct?'disabled':''}>SL</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+
+        return `<div class="${cardClass}">
+            <div class="phase-header">
+                <div class="phase-title">
+                    <div class="phase-number">${phase.phase_num}</div>
+                    <div><div class="phase-name">Fase ${phase.phase_num}</div></div>
+                </div>
+                <div class="phase-meta">
+                    <span>Recovery: <span class="value">$${phase.recovery.toFixed(2)}</span></span>
+                    <span>Lot: <span class="value">${phase.lot.toFixed(2)}</span></span>
+                    <span>SL Base: <span class="value">${phase.sl_base_pips} pips</span></span>
+                    <span>TP/Trade: <span class="value">$${phase.tp_value.toFixed(2)}</span></span>
+                </div>
+            </div>
+            <div class="phase-body">
+                <table class="trades-table">
+                    <thead><tr>
+                        <th>Trade</th><th>Lotto</th><th>TP (pips)</th><th>SL (pips)</th>
+                        <th>TP ($)</th><th>SL ($)</th><th>Esito</th><th>Azione</th>
+                    </tr></thead>
+                    <tbody>${tradesHtml}</tbody>
+                </table>
+                <div style="margin-top:12px;display:flex;gap:16px;font-size:12px;color:var(--text-secondary);flex-wrap:wrap;">
+                    <span>Loss Reale: <strong style="color:var(--text);">$${phase.loss_real.toFixed(2)}</strong></span>
+                    <span>Disallineamento: <strong style="color:${disColor};">${disSign}${dis.toFixed(2)}</strong></span>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    updateStatusBadge();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  RIGHT-PANEL UPDATES
+// ════════════════════════════════════════════════════════════════
+function updateStatusBadge() {
+    const el = document.getElementById('cycleStatus');
+    const w  = winner();
+    if      (w === 'BIG')   el.innerHTML = '<span class="status-badge big-win">Vittoria BIG</span>';
+    else if (w === 'SMALL') el.innerHTML = '<span class="status-badge small-win">Vittoria SMALL</span>';
+    else if (cycleData)     el.innerHTML = `<span class="status-badge active">Fase ${currentPhase()+1} — Trade ${currentTrade()+1}</span>`;
+    else                    el.innerHTML = '<span class="status-badge active">In attesa</span>';
+}
+
+function updateSummary() {
+    if (!cycleData) return;
+    document.getElementById('summaryBig').textContent         = `$${cycleData.big_balance.toFixed(2)}`;
+    document.getElementById('summarySmall').textContent       = `$${cycleData.small_balance.toFixed(2)}`;
+    document.getElementById('summaryPips').textContent        = cycleData.starting_pips;
+    document.getElementById('summaryPhases').textContent      = cycleData.num_phases;
+    document.getElementById('summaryTrades').textContent      = cycleData.trades_per_phase;
+    const theoretical = (cycleData.big_balance / cycleData.num_phases).toFixed(2);
+    document.getElementById('summaryTheoretical').textContent = `$${theoretical}`;
+}
+
+function updateDisallineamenti() {
+    const c = document.getElementById('disallineamentiContainer');
+    if (!cycleData?.phases?.length) { c.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;">Nessun dato</p>'; return; }
+    c.innerHTML = cycleData.phases.map(p => {
+        const d   = p.disallineamento;
+        const cls = d > 0 ? 'positive' : d < 0 ? 'negative' : 'neutral';
+        const lbl = d > 0 ? 'Superiore' : d < 0 ? 'Inferiore' : 'Allineata';
+        const sgn = d > 0 ? '+' : '';
+        return `<div class="disallineamento-box ${cls}">
+            <strong>Fase ${p.phase_num}</strong> — ${lbl}<br>
+            Loss: $${p.loss_real.toFixed(2)} | Dis: ${sgn}${d.toFixed(2)}
+        </div>`;
+    }).join('');
+}
+
+function updateCycleStatePanel() {
+    const w  = winner();
+    const cp = currentPhase();
+    const ct = currentTrade();
+    document.getElementById('activePhase').textContent    = w ? 'Terminato' : `Fase ${cp + 1}`;
+    document.getElementById('currentTrade').textContent   = w ? '-' : `Trade ${ct + 1}`;
+    document.getElementById('consecutiveTPs').textContent = `${consTP()}/${tradesPerPhase()}`;
+    document.getElementById('totalSLs').textContent       = `${slCount()}/${numPhases()}`;
+
+    const finalSection = document.getElementById('finalResultSection');
+    const finalBox     = document.getElementById('finalResultBox');
+
+    if (w) {
+        finalSection.style.display = 'block';
+        if (w === 'BIG') {
+            const tpAmt = cycleData.phases[cp]?.trades[0]?.tp_money ?? 0;
+            const tpp   = tradesPerPhase();
+            finalBox.innerHTML = `<div class="final-result big-win">
+                <h2>🏆 VITTORIA BIG</h2>
+                <p>${tpp} TP consecutivi in Fase ${cp + 1}</p>
+                <p style="margin-top:8px;font-size:16px;font-weight:700;color:var(--accent);">
+                    +$${tpAmt.toFixed(2)} × ${tpp} = $${(tpAmt * tpp).toFixed(2)}
+                </p>
+            </div>`;
+        } else {
+            const totalLoss = cycleData.phases.reduce((sum, p) => {
+                const slT = p.trades.find(t => t.outcome === 'SL');
+                return sum + (slT ? slT.sl_money : 0);
+            }, 0);
+            finalBox.innerHTML = `<div class="final-result small-win">
+                <h2>🛡️ VITTORIA SMALL</h2>
+                <p>1 SL in ogni fase (${numPhases()} fasi)</p>
+                <p style="margin-top:8px;font-size:16px;font-weight:700;color:var(--danger);">
+                    Loss totale: $${totalLoss.toFixed(2)}
+                </p>
+            </div>`;
+        }
+    } else {
+        finalSection.style.display = 'none';
+    }
+}
+
+function updateConfigChips() {
+    const el = document.getElementById('configChips');
+    if (!cycleData) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+        <span class="config-chip"><strong>${cycleData.num_phases}</strong> fasi</span>
+        <span class="config-chip"><strong>${cycleData.trades_per_phase}</strong> trade/fase</span>
+        <span class="config-chip">Vittoria BIG = <strong>${cycleData.trades_per_phase}</strong> TP consecutivi</span>`;
+}
+
+function fullRender() {
+    renderCycle();
+    updateSummary();
+    updateDisallineamenti();
+    updateCycleStatePanel();
+    updateConfigChips();
+    updateStatusBadge();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  CORE ACTIONS (each talks to the API)
+// ════════════════════════════════════════════════════════════════
+
+// ── Boot: load slot list ──────────────────────────────────────
+async function boot() {
+    showSpinner(true);
+    try {
+        slotList = await api.listSlots();
+        renderSlotList();
+    } catch (e) {
+        toast(`Errore caricamento slot: ${e.message}`, 'error');
+    } finally {
+        showSpinner(false);
+        updateSlotBanner();
+    }
+}
+
+// ── Create empty slot ─────────────────────────────────────────
+function openCreateSlotModal() {
+    document.getElementById('newSlotName').value = '';
+    document.getElementById('createSlotModal').classList.add('show');
+    setTimeout(() => document.getElementById('newSlotName').focus(), 80);
+}
+
+async function confirmCreateEmptySlot() {
+    const name = document.getElementById('newSlotName').value.trim();
+    if (!name) { toast('Inserisci un nome per lo slot', 'error'); return; }
+    closeModal('createSlotModal');
+    showSpinner(true);
+    try {
+        const summary  = await api.createSlot(name);   // → SlotSummary
+        slotList.unshift(summary);
+        renderSlotList();
+
+        // Activate it immediately (fetch full slot)
+        await _activateSlot(summary.id, summary.name, false);
+        toast(`Slot "${name}" creato`, 'success');
+    } catch (e) {
+        toast(`Errore: ${e.message}`, 'error');
+    } finally {
+        showSpinner(false);
+    }
+}
+
+// ── Load (open) an existing slot ──────────────────────────────
+async function loadSlot(id) {
+    showSpinner(true);
+    try {
+        const slot = await api.getSlot(id);
+        _applySlot(slot);
+        toast(`Slot "${slot.name}" caricato`, 'info');
+    } catch (e) {
+        toast(`Errore: ${e.message}`, 'error');
+    } finally {
+        showSpinner(false);
+    }
+}
+
+async function _activateSlot(id, name, populate = true) {
+    if (populate) {
+        const slot = await api.getSlot(id);
+        _applySlot(slot);
+    } else {
+        // new empty slot: just set IDs and reset UI
+        activeSlotId   = id;
+        activeSlotName = name;
+        cycleData      = null;
+        renderCycle();
+        updateSlotBanner();
+        renderSlotList();
+    }
+}
+
+function _applySlot(slot) {
+    activeSlotId   = slot.id;
+    activeSlotName = slot.name;
+    cycleData      = slot;
+    populateSidebarFromSlot(slot);
+    fullRender();
+    updateSlotBanner();
+    renderSlotList();
+}
+
+// ── Close active slot (client-side only) ─────────────────────
+function clearActiveSlot() {
+    if (!confirm('Vuoi chiudere lo slot attivo?')) return;
+    activeSlotId   = null;
+    activeSlotName = null;
+    cycleData      = null;
+    document.getElementById('phasesContainer').innerHTML = `<div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+        </svg>
+        <p>Crea o seleziona uno slot per iniziare</p>
+    </div>`;
+    document.getElementById('disallineamentiContainer').innerHTML = '';
+    document.getElementById('finalResultSection').style.display = 'none';
+    document.getElementById('configChips').innerHTML = '';
+    document.getElementById('cycleStatus').innerHTML = '<span class="status-badge active">In attesa</span>';
+    updateSlotBanner();
+    renderSlotList();
+}
+
+// ── Delete a slot ─────────────────────────────────────────────
+async function deleteSlot(id) {
+    if (!confirm('Eliminare questo slot? Operazione irreversibile.')) return;
+    showSpinner(true);
+    try {
+        await api.deleteSlot(id);
+        slotList = slotList.filter(s => s.id !== id);
+        if (activeSlotId === id) clearActiveSlot();
+        else renderSlotList();
+        toast('Slot eliminato', 'success');
+    } catch (e) {
+        toast(`Errore: ${e.message}`, 'error');
+    } finally {
+        showSpinner(false);
+    }
+}
+
+// ── Calculate cycle  →  POST /cycle/slots/{id}/calculate ─────
+async function calculateCycle() {
+    if (!activeSlotId) { toast('Crea prima uno slot', 'error'); return; }
+
+    const payload = buildPayload();
+
+    // Basic client-side validation
+    if (payload.big_balance <= 0 || payload.small_balance <= 0 || payload.starting_pips <= 0) {
+        toast('Inserisci valori validi per BIG, SMALL e Starting Pips', 'error'); return;
+    }
+
+    showSpinner(true);
+    try {
+        // The calculate endpoint also persists the payload, so one call does both
+        const slot = await api.calculate(activeSlotId, payload);
+        _applySlot(slot);
+        // refresh slot list (has_data is now true)
+        slotList = await api.listSlots();
+        renderSlotList();
+        toast('Ciclo calcolato ✓', 'success');
+    } catch (e) {
+        toast(`Errore calcolo: ${e.message}`, 'error');
+    } finally {
+        showSpinner(false);
+    }
+}
+
+// ── Save sidebar inputs without recalculating  ───────────────
+//    Used by the "Salva" button
+async function saveSlot() {
+    if (!activeSlotId) { toast('Nessuno slot attivo', 'error'); return; }
+    if (!cycleData)    { toast('Calcola prima un ciclo', 'error'); return; }
+
+    document.getElementById('overwriteSlotName').textContent = activeSlotName;
+    document.getElementById('overwriteSlotModal').classList.add('show');
+}
+
+async function confirmOverwriteSlot(action) {
+    closeModal('overwriteSlotModal');
+    if (action === 'update') {
+        showSpinner(true);
+        try {
+            await api.savePayload(activeSlotId, buildPayload());
+            toast(`Slot "${activeSlotName}" aggiornato ✓`, 'success');
+        } catch (e) {
+            toast(`Errore: ${e.message}`, 'error');
+        } finally {
+            showSpinner(false);
+        }
+    }
+    // 'new' branch is handled by openCreateSlotModal (already bound in HTML)
+}
+
+// ── Record TP/SL  →  POST /cycle/slots/{id}/outcome ──────────
+async function recordOutcome(phaseIdx, tradeIdx, outcome) {
+    if (!activeSlotId || winner()) return;
+    if (phaseIdx !== currentPhase() || tradeIdx !== currentTrade()) return;
+
+    // Optimistic disable: prevent double-clicks while awaiting
+    const btns = document.querySelectorAll('.trade-btn');
+    btns.forEach(b => b.disabled = true);
+
+    showSpinner(true);
+    try {
+        const slot = await api.recordOutcome(activeSlotId, phaseIdx, tradeIdx, outcome);
+        _applySlot(slot);
+        toast(`${outcome} registrato per Fase ${phaseIdx+1} Trade ${tradeIdx+1}`, 'success');
+    } catch (e) {
+        toast(`Errore: ${e.message}`, 'error');
+        // Re-enable on failure
+        document.querySelectorAll('.trade-btn').forEach(b => b.disabled = false);
+    } finally {
+        showSpinner(false);
+    }
+}
+
+// ── Reset inputs (client-side only) ──────────────────────────
+function resetInputs() {
+    document.getElementById('bigBalance').value      = 3000;
+    document.getElementById('smallBalance').value    = 1000;
+    document.getElementById('startingPips').value    = 100;
+    document.getElementById('numPhases').value       = 3;
+    document.getElementById('tradesPerPhase').value  = 4;
+    updateFormulaPreview();
+    toast('Campi resettati ai valori predefiniti', 'info');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  EA NAME SANITIZE / PREVIEW
+// ════════════════════════════════════════════════════════════════
+function sanitizeEAName(raw) {
+    if (!raw) return '';
+    let s = raw.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]/g, '');
+    if (/^[0-9\-]/.test(s)) s = 'EA_' + s;
+    return s;
+}
+
+function updateEANamePreview() {
+    const raw   = document.getElementById('stratEAName').value;
+    const clean = sanitizeEAName(raw);
+    const el    = document.getElementById('eaNamePreview');
+    if (!raw)          { el.textContent = ''; return; }
+    if (raw === clean) { el.innerHTML = '<span style="color:var(--accent);">✓ Nome valido</span>'; return; }
+    if (!clean)        { el.innerHTML = '<span style="color:var(--danger);">⚠ Nome non valido</span>'; return; }
+    el.innerHTML = `<span style="color:var(--warning);">→ Sarà sanitizzato: <strong>${clean}</strong></span>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  PDF EXPORT  (reads from cycleData, unchanged logic)
+// ════════════════════════════════════════════════════════════════
+function exportPDF() {
+    if (!cycleData || !cycleData.phases?.length) { toast('Nessun ciclo da esportare', 'error'); return; }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    doc.setFontSize(20);
+    doc.text('FX Cycle Calculator', 105, 20, { align: 'center' });
+    doc.setFontSize(10); doc.setTextColor(100);
+    doc.text(`Report Ciclo — ${cycleData.num_phases} fasi × ${cycleData.trades_per_phase} trade`, 105, 28, { align: 'center' });
+
+    const theoretical = (cycleData.big_balance / cycleData.num_phases).toFixed(2);
+    doc.setFontSize(14); doc.setTextColor(0);
+    doc.text('Parametri', 14, 45);
+    doc.autoTable({
+        startY: 50,
+        head: [['Parametro', 'Valore']],
+        body: [
+            ['BIG Balance',    `$${cycleData.big_balance.toFixed(2)}`],
+            ['SMALL Balance',  `$${cycleData.small_balance.toFixed(2)}`],
+            ['Starting Pips',  cycleData.starting_pips.toString()],
+            ['Numero Fasi',    cycleData.num_phases.toString()],
+            ['Trade per Fase', cycleData.trades_per_phase.toString()],
+            ['Loss Teorica',   `$${theoretical}`],
+            ['Vittoria BIG',   `${cycleData.trades_per_phase} TP consecutivi`],
+            ['Vittoria SMALL', '1 SL in ogni fase'],
+        ],
+        theme: 'grid', headStyles: { fillColor: [0,180,140], textColor: 255 }, styles: { fontSize: 10 }
+    });
+
+    const s = cycleData.strategy;
+    const tfMap = { '5':'M5','15':'M15','30':'M30','16385':'H1','16388':'H4','16408':'D1' };
+    let y = doc.lastAutoTable.finalY + 12;
+    doc.setFontSize(14); doc.text('Strategia Ciclo', 14, y);
+    doc.autoTable({
+        startY: y + 5,
+        head: [['Parametro Strategia', 'Valore']],
+        body: [
+            ['Nome EA',                    s?.ea_name || '-'],
+            ['Usa nome come commento',     s?.use_name_as_comment ? 'SI' : 'NO'],
+            ['Timeframe',                  tfMap[s?.signal_tf] || s?.signal_tf || '-'],
+            ['Periodo EMA',                s?.ema_period || '-'],
+            ['Periodo BB',                 s?.bb_period || '-'],
+            ['Deviazione BB',              s?.bb_deviation || '-'],
+            ['Candela chiusa richiesta',   s?.require_closed_candle ? 'SI' : 'NO'],
+            ['Chiusura dentro BB',         s?.require_close_inside_bb ? 'SI' : 'NO'],
+        ],
+        theme: 'grid', headStyles: { fillColor: [68,136,255], textColor: 255 }, styles: { fontSize: 10 }
+    });
+
+    y = doc.lastAutoTable.finalY + 15;
+    doc.text('Tabella Completa Trades', 14, y);
+    const allTrades = [];
+    cycleData.phases.forEach(p => {
+        p.trades.forEach(t => allTrades.push([
+            `F${p.phase_num}T${t.num}`, t.lot.toFixed(2),
+            t.tp_pips, t.sl_pips,
+            `$${t.tp_money.toFixed(2)}`, `$${t.sl_money.toFixed(2)}`,
+            t.outcome || '-'
+        ]));
+    });
+    doc.autoTable({
+        startY: y + 5,
+        head: [['Trade','Lotto','TP Pips','SL Pips','TP $','SL $','Esito']],
+        body: allTrades,
+        theme: 'grid', headStyles: { fillColor: [0,180,140], textColor: 255 },
+        styles: { fontSize: 9 }, alternateRowStyles: { fillColor: [245,245,245] }
+    });
+
+    if (winner()) {
+        y = doc.lastAutoTable.finalY + 15;
+        doc.setFontSize(16);
+        const col = winner() === 'BIG' ? [0,180,140] : [255,68,68];
+        doc.setTextColor(col[0], col[1], col[2]);
+        doc.text(`RISULTATO: VITTORIA ${winner()}`, 105, y, { align: 'center' });
+    }
+
+    doc.save('fx-cycle-report.pdf');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SETFILE EXPORT  (reads from cycleData, unchanged logic)
+// ════════════════════════════════════════════════════════════════
+function exportSetFile() {
+    if (!cycleData?.phases?.length) { toast('Calcola prima un ciclo', 'error'); return; }
+
+    const np  = cycleData.num_phases;
+    const tpp = cycleData.trades_per_phase;
+    const sp  = cycleData.starting_pips;
+
+    if (np > 3 && !confirm(`⚠️ ${np} fasi configurate. L'EA supporta max 3. Esportare solo le prime 3?`)) return;
+
+    const pes = Math.min(np, 3);
+    const setLine     = (n,v) => `${n}=${v}||${v}||0||0||N`;
+    const setLineBool = (n,v) => `${n}=${v}||false||0||true||N`;
+
+    function phaseArrays(pIdx) {
+        const tp = new Array(10).fill(0), sl = new Array(10).fill(0);
+        if (pIdx < pes && cycleData.phases[pIdx]) {
+            const ph = cycleData.phases[pIdx];
+            for (let i = 0; i < tpp && i < 10; i++) {
+                tp[i] = sp;
+                if (ph.trades[i]) sl[i] = ph.trades[i].sl_pips;
+            }
+        }
+        return { tp, sl };
+    }
+
+    const lot = (i) => (i < pes && cycleData.phases[i]) ? cycleData.phases[i].lot.toFixed(2) : '0.10';
+    const stopStep = Math.max(1, Math.min(10, tpp));
+    const p1 = phaseArrays(0), p2 = phaseArrays(1), p3 = phaseArrays(2);
+
+    const s   = cycleData.strategy;
+    const ean = (s?.ea_name || 'Cycle_EA_Premium').trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const unc = s?.use_name_as_comment ? 'true' : 'false';
+
+    const ts  = new Date().toISOString().replace('T',' ').substring(0,19);
+    const lines = [
+        `; SetFile generato da FX Cycle Calculator — ${ts}`,
+        `; Target EA: ${ean} (MT5)`,
+        `; Config: ${pes} fasi × ${tpp} trade/fase | ${sp} pips`,
+        '','; ===== GENERAL SETTINGS =====',
+        `EA_DisplayName=${ean}`,
+        setLineBool('UseDisplayNameAsComment', unc),
+        setLine('Phase1_LotSize', lot(0)),
+        setLine('Phase2_LotSize', lot(1)),
+        setLine('Phase3_LotSize', lot(2)),
+        setLine('MagicNumber','0'), setLine('SlippagePoints','20'),
+        setLineBool('UseStatePersistenceGV','true'),
+        setLineBool('OneTradeAtATime','true'),
+        setLineBool('AutoRestartCompletedCycle','false'),
+        setLineBool('AutoRestartTerminatedCycle','false'),
+        setLineBool('ShowDashboard','true'),
+        setLineBool('PrintStateChanges','true'),
+        setLine('StopCycleAtTPStep', stopStep), '',
+    ];
+
+    [p1,p2,p3].forEach((p,pi) => {
+        lines.push(`; ===== PHASE ${pi+1} SETTINGS =====`);
+        for (let i=0;i<10;i++) lines.push(setLine(`Phase${pi+1}_TP${i+1}_Pips`, p.tp[i]));
+        for (let i=0;i<10;i++) lines.push(setLine(`Phase${pi+1}_SL${i+1}_Pips`, p.sl[i]));
+        lines.push('');
+    });
+
+    lines.push('; ===== STRATEGY SETTINGS =====');
+    lines.push(setLine('SignalTF', s?.signal_tf || '5'));
+    lines.push(setLine('EmaPeriod', s?.ema_period || 200));
+    lines.push(setLine('BB_Period', s?.bb_period || 20));
+    lines.push(setLine('BB_Deviation', parseFloat(s?.bb_deviation||2).toFixed(1)));
+    lines.push(setLineBool('RequireClosedCandleTouch', s?.require_closed_candle ? 'true':'false'));
+    lines.push(setLineBool('RequireCloseBackInsideBB', s?.require_close_inside_bb ? 'true':'false'));
+    lines.push(setLine('MaxSpreadPoints','250'));
+    lines.push(setLineBool('NewBarOnly','true'), '');
+    lines.push('; ===== FILTERS =====');
+    lines.push(setLineBool('UseTimeFilter','true'));
+    lines.push(setLine('StartHour','16'), setLine('EndHour','21'));
+    lines.push(setLineBool('OneTradePerDay','true'), '');
+    lines.push('; ===== DASHBOARD =====');
+    lines.push(setLineBool('ShowResetButton','false'));
+    lines.push(setLine('ResetButtonX','170'), setLine('ResetButtonY','18'), '');
+
+    const blob = new Blob([lines.join('\r\n')], { type:'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `${ean}_${pes}x${tpp}_${sp}pips.set`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  EA DOWNLOAD  (unchanged from original)
+// ════════════════════════════════════════════════════════════════
+function downloadCustomEA() {
+    const rawName  = document.getElementById('stratEAName').value;
+    const cleanName = sanitizeEAName(rawName);
+    if (!cleanName) { toast('Inserisci un nome EA valido', 'error'); return; }
+
+    const template = document.getElementById('eaSourceTemplate');
+    if (!template) { toast('Template EA non trovato', 'error'); return; }
+    let source = template.textContent;
+
+    source = source.replace(
+        /input string\s+EA_DisplayName\s*=\s*"[^"]*";/,
+        `input string   EA_DisplayName            = "${cleanName}";`
+    );
+    const headerLines = [
+        `#property copyright "${cleanName}"`,
+        `#property description "${cleanName} - Cycle EA Premium (3 Phase EMA200 + Bollinger Bands)"`,
+        `#property version   "4.0"`,
+        `#property strict`
+    ];
+    source = source
+        .replace(/^#property\s+description\s+"[^"]*"\s*\n/gm, '')
+        .replace(/^#property\s+copyright\s+"[^"]*"\s*\n/gm, '')
+        .replace(/^#property\s+version\s+"[^"]*"\s*\n/gm, '')
+        .replace(/^#property\s+strict\s*\n/gm, '')
+        .replace(/^(\/\/\+-+\+\n(?:\/\/\|[^\n]*\n)+\/\/\+-+\+\n)/, '');
+
+    const newHeader =
+        `//+------------------------------------------------------------------+\n` +
+        `//|${('  ' + cleanName + '.mq5').padEnd(66)}|\n` +
+        `//|${('  Copyright 2026, ' + cleanName).padEnd(66)}|\n` +
+        `//+------------------------------------------------------------------+\n` +
+        headerLines.join('\n') + '\n';
+
+    source = newHeader + source.replace(/^\n+/, '');
+    const blob = new Blob([source.replace(/\n/g,'\r\n')], { type:'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `${cleanName}.mq5`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════════════
+updateFormulaPreview();
+updateEANamePreview();
+updateSlotBanner();
+boot();   // ← loads slot list from the API on page load
+</script>
+</body>
+</html>
