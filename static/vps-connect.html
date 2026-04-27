@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPS Connect - Hedge Bridge</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/assets/ui.css">
+
+  <style>
+    .form-label { font-weight: 500; color: #cbd5e1; }
+    .ui-input { background: #334155; border: 1px solid #475569; color: #e2e8f0; }
+    .ui-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
+    .ui-input:disabled { opacity: 0.7; background: #2a3a4f; }
+    .ui-input option { background: #334155; color: #e2e8f0; }
+
+    tr.vps-highlight td { background: rgba(59,130,246,0.08); }
+
+    .badge-online  { background: #00c853; color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 20px; }
+    .badge-offline { background: #475569; color: #cbd5e1; font-size: 11px; padding: 3px 9px; border-radius: 20px; }
+
+    .launch-btn {
+      background: #1a3a5c;
+      border: 1.5px solid #1f9cf5;
+      color: #1f9cf5;
+      border-radius: 8px;
+      padding: 4px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .launch-btn:hover { background: #1f9cf5; color: #fff; }
+    .launch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body class="ui-body ui-profile-page">
+
+<div class="container py-4" style="max-width: 1200px;">
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+      <div class="ui-h1">VPS Management</div>
+      <div class="ui-sub">Add, edit and remotely access your VPS entries</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="/app" class="ui-btn px-3">← Back</a>
+      <button id="logoutBtn" class="ui-btn px-3">Logout</button>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- ─── Add / Edit Form ─── -->
+    <div class="col-lg-5">
+      <div class="ui-panel">
+        <div class="ui-panel-title" id="formTitle">Add VPS</div>
+
+        <form id="vpsForm">
+          <input type="hidden" id="vpsId" value="">
+
+          <div class="mb-3">
+            <label class="form-label">VPS Hostname or IP Address</label>
+            <input type="text" id="inpHost" class="ui-input form-control"
+                   placeholder="e.g. 207.189.0.112 or host.example.com" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Username</label>
+            <input type="text" id="inpUsername" class="ui-input form-control"
+                   placeholder="VPS username" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">VPS Password</label>
+            <div style="position:relative;">
+              <input type="password" id="inpPassword" class="ui-input form-control"
+                     placeholder="VPS Password">
+              <button type="button" id="togglePassword"
+                      style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;">
+                👁
+              </button>
+            </div>
+            <div id="passwordHint" class="form-text" style="color:#64748b;display:none;">
+              Leave blank to keep the existing password.
+            </div>
+          </div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-7">
+              <label class="form-label">Protocol</label>
+              <select id="inpProtocol" class="ui-input form-select">
+                <option value="rdp">RDP — Windows</option>
+              </select>
+            </div>
+            <div class="col-5">
+              <label class="form-label">Port <span style="opacity:.5;font-size:11px;">(optional)</span></label>
+              <input type="number" id="inpPort" class="ui-input form-control"
+                     placeholder="default">
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Associated MT5 Account</label>
+            <select id="inpMt5" class="ui-input form-select">
+              <option value="">— None —</option>
+            </select>
+            <div class="form-text" style="color:#64748b;">
+              Only unlinked MT5 accounts are shown.
+            </div>
+          </div>
+
+          <div class="col-12">
+            <label class="form-check form-switch">
+              <input type="checkbox" id="inpAutoConnect" class="form-check-input" checked>
+              <span class="form-check-label">Auto connect</span>
+            </label>
+          </div>
+
+          <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="ui-btn w-50" id="saveBtn">Save</button>
+            <button type="button" class="ui-btn w-50" id="clearBtn">Clear</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ─── VPS List ─── -->
+    <div class="col-lg-7">
+      <div class="ui-panel">
+        <div class="ui-panel-title">VPS List</div>
+
+        <div class="table-responsive">
+          <table class="table ui-table align-middle mb-0">
+            <thead>
+              <tr class="profile-table-head">
+                <th>Host / IP</th>
+                <th>Protocol</th>
+                <th>Associated MT5</th>
+                <th>Online</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="vpsTableBody">
+              <tr><td colspan="5" class="text-center py-4">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = localStorage.getItem("token");
+if (!token) window.location.href = "/";
+
+const urlParams   = new URLSearchParams(window.location.search);
+const highlightId = urlParams.get("vps_id") ? parseInt(urlParams.get("vps_id")) : null;
+
+let allVps    = [];
+let editingId = null;
+
+// ── Password toggle ───────────────────────────────────────────
+document.getElementById("togglePassword").addEventListener("click", function () {
+  const pwd = document.getElementById("inpPassword");
+  pwd.type = pwd.type === "password" ? "text" : "password";
+  this.textContent = pwd.type === "password" ? "👁" : "🙈";
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  window.location.href = "/";
+});
+
+// ── Load MT5 dropdown ─────────────────────────────────────────
+async function loadMt5Dropdown(currentMt5Id = null) {
+  const select = document.getElementById("inpMt5");
+  select.innerHTML = '<option value="">— None —</option>';
+  try {
+    const res  = await fetch("/vps/available-mt5", { headers: { "Authorization": "Bearer " + token } });
+    const data = await res.json();
+    (data.accounts || []).forEach(acc => {
+      const opt = document.createElement("option");
+      opt.value       = acc.id;
+      opt.textContent = `${acc.name} (${acc.login})`;
+      select.appendChild(opt);
+    });
+    if (currentMt5Id) {
+      // If the current account isn't in the list (it's "taken" by this VPS), add it
+      if (!select.querySelector(`option[value="${currentMt5Id}"]`)) {
+        const vps = allVps.find(v => v.id === editingId);
+        if (vps && vps.mt5_name) {
+          const opt = document.createElement("option");
+          opt.value       = vps.associated_mt5_id;
+          opt.textContent = `${vps.mt5_name} (${vps.mt5_login})`;
+          select.appendChild(opt);
+        }
+      }
+      select.value = currentMt5Id;
+    }
+  } catch (err) { console.error("Failed to load MT5 accounts", err); }
+}
+
+// ── Load VPS list ─────────────────────────────────────────────
+async function loadVps() {
+  try {
+    const res = await fetch("/vps/accounts", { headers: { "Authorization": "Bearer " + token } });
+    if (res.status === 401) { localStorage.removeItem("token"); window.location.href = "/"; return; }
+    const data = await res.json();
+    allVps = data.accounts || [];
+    renderVps(allVps);
+  } catch (err) { console.error(err); }
+}
+
+// ── Render table ──────────────────────────────────────────────
+function renderVps(list) {
+  const tbody = document.getElementById("vpsTableBody");
+  tbody.innerHTML = "";
+
+  if (list.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4">No VPS added yet.</td></tr>`;
+    return;
+  }
+
+  list.forEach(vps => {
+    const row = document.createElement("tr");
+    if (vps.id === highlightId) row.classList.add("vps-highlight");
+
+    const mt5Label = vps.mt5_name
+      ? `${escHtml(vps.mt5_name)} <small style="opacity:.6;">(${vps.mt5_login})</small>`
+      : '<span style="opacity:.4;">—</span>';
+
+    const onlineBadge = vps.is_online
+      ? `<span class="badge-online">Online</span>`
+      : `<span class="badge-offline">Offline</span>`;
+
+    const protoLabel = (vps.protocol || "ssh").toUpperCase();
+
+    row.innerHTML = `
+      <td style="font-family:monospace;font-size:13px;">${escHtml(vps.host)}</td>
+      <td><code style="font-size:12px;">${protoLabel}${vps.port ? ':' + vps.port : ''}</code></td>
+      <td>${mt5Label}</td>
+      <td>${onlineBadge}</td>
+      <td class="text-end" style="white-space:nowrap;">
+        <button class="launch-btn me-1" data-id="${vps.id}" title="Open remote desktop in new tab">
+          🖥️ Connect
+        </button>
+        <button class="ui-btn px-2 edit-btn" data-id="${vps.id}" style="font-size:12px;">Edit</button>
+        <button class="btn btn-danger btn-sm delete-btn ms-1" data-id="${vps.id}">✕</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  if (highlightId) {
+    const el = tbody.querySelector("tr.vps-highlight");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  document.querySelectorAll(".launch-btn").forEach(btn => {
+    btn.addEventListener("click", () => launchTerminal(parseInt(btn.dataset.id), btn));
+  });
+  document.querySelectorAll(".edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => fillFormForEdit(parseInt(btn.dataset.id)));
+  });
+  document.querySelectorAll(".delete-btn").forEach(btn => {
+    btn.addEventListener("click", () => deleteVps(parseInt(btn.dataset.id)));
+  });
+}
+
+// ── Launch Guacamole terminal ─────────────────────────────────
+async function launchTerminal(vpsId, btn) {
+  btn.disabled     = true;
+  btn.textContent  = "Opening…";
+
+  try {
+    const res  = await fetch(`/vps/accounts/${vpsId}/launch`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert("Could not open terminal: " + (data.detail || "Unknown error"));
+      return;
+    }
+
+    window.open(data.url, "_blank");
+  } catch (err) {
+    alert("Connection error while launching terminal.");
+    console.error(err);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = "🖥️ Connect";
+  }
+}
+
+// ── Fill form for edit ────────────────────────────────────────
+async function fillFormForEdit(id) {
+  const vps = allVps.find(v => v.id === id);
+  if (!vps) return;
+  editingId = id;
+  document.getElementById("formTitle").textContent       = "Edit VPS";
+  document.getElementById("vpsId").value                 = id;
+  document.getElementById("inpHost").value               = vps.host;
+  document.getElementById("inpUsername").value           = vps.username;
+  document.getElementById("inpPassword").value           = "";
+  document.getElementById("inpProtocol").value           = vps.protocol || "ssh";
+  document.getElementById("inpPort").value               = vps.port || "";
+  document.getElementById("inpAutoConnect").checked      = vps.auto_connect;
+  document.getElementById("passwordHint").style.display  = "block";
+  await loadMt5Dropdown(vps.associated_mt5_id);
+  document.getElementById("vpsForm").scrollIntoView({ behavior: "smooth" });
+}
+
+// ── Reset form ────────────────────────────────────────────────
+function resetForm() {
+  editingId = null;
+  document.getElementById("formTitle").textContent    = "Add VPS";
+  document.getElementById("vpsId").value              = "";
+  document.getElementById("vpsForm").reset();
+  document.getElementById("inpAutoConnect").checked   = true;
+  document.getElementById("passwordHint").style.display = "none";
+  loadMt5Dropdown();
+}
+document.getElementById("clearBtn").addEventListener("click", resetForm);
+
+// ── Form submit ───────────────────────────────────────────────
+document.getElementById("vpsForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const saveBtn   = document.getElementById("saveBtn");
+  saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+
+  const host        = document.getElementById("inpHost").value.trim();
+  const username    = document.getElementById("inpUsername").value.trim();
+  const password    = document.getElementById("inpPassword").value;
+  const protocol    = document.getElementById("inpProtocol").value;
+  const portVal     = document.getElementById("inpPort").value;
+  const port        = portVal ? parseInt(portVal) : null;
+  const mt5Val      = document.getElementById("inpMt5").value;
+  const autoConnect = document.getElementById("inpAutoConnect").checked;
+  const associated_mt5_id = mt5Val ? parseInt(mt5Val) : null;
+
+  if (!editingId && !password) {
+    alert("Password is required when adding a new VPS.");
+    saveBtn.disabled = false; saveBtn.textContent = "Save";
+    return;
+  }
+
+  const payload = { host, username, protocol, port, associated_mt5_id, auto_connect: autoConnect };
+  if (password) payload.password = password;
+
+  const url    = editingId ? `/vps/accounts/${editingId}` : "/vps/accounts";
+  const method = editingId ? "PUT" : "POST";
+
+  try {
+    const res  = await fetch(url, {
+      method,
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) { alert(data.message || "VPS saved"); resetForm(); await loadVps(); }
+    else alert(data.detail || "Failed to save VPS");
+  } catch (err) { alert("Connection error"); }
+
+  saveBtn.disabled = false; saveBtn.textContent = "Save";
+});
+
+// ── Delete ────────────────────────────────────────────────────
+async function deleteVps(id) {
+  if (!confirm("Delete this VPS entry?")) return;
+  try {
+    const res  = await fetch(`/vps/accounts/${id}`, {
+      method: "DELETE",
+      headers: { "Authorization": "Bearer " + token },
+    });
+    const data = await res.json();
+    if (res.ok) { if (editingId === id) resetForm(); await loadVps(); }
+    else alert(data.detail || "Failed to delete");
+  } catch (err) { alert("Connection error"); }
+}
+
+function escHtml(str) {
+  if (!str) return "";
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function startHeartbeat(pageName) {
+  setInterval(() => {
+    fetch("admin/activity/heartbeat", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ page: pageName, action: "heartbeat" }),
+    });
+  }, 15000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────
+(async () => {
+  await loadVps();
+  await loadMt5Dropdown();
+  startHeartbeat("vps-connect");
+})();
+</script>
+
+</body>
+</html>

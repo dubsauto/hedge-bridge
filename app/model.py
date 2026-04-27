@@ -180,7 +180,50 @@ class ActivityLog(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class VpsAccount(Base):
+    __tablename__ = "vps_accounts"
+ 
+    id = Column(Integer, primary_key=True)
+ 
+    owner_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+ 
+    # Connection details
+    host     = Column(String(255), nullable=False)   # IP or hostname
+    username = Column(String(128), nullable=False)   # SSH / RDP username
+    password = Column(Text, nullable=False)          # store encrypted at app layer if needed
+ 
+    # Protocol — "ssh" (default, Linux) or "rdp" (Windows)
+    protocol = Column(String(8), default="ssh")
+    # Port — None means use the protocol default (22 for SSH, 3389 for RDP)
+    port     = Column(Integer, nullable=True)
+ 
+    # Optional link to a TradingAccount
+    associated_mt5_id = Column(
+        Integer,
+        ForeignKey("trading_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+ 
+    # Behaviour flags
+    auto_connect = Column(Boolean, default=True)
+ 
+    # Runtime state (updated by health-check or deploy hooks)
+    is_online      = Column(Boolean, default=False)
+    last_checked_at = Column(DateTime, nullable=True)
+ 
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+ 
+    # Relationships
+    owner          = relationship("User")
+    associated_mt5 = relationship("TradingAccount", foreign_keys=[associated_mt5_id])
 
+    
 # =========================
 # ACTIVE USERS (REAL-TIME TRACKING)
 # =========================

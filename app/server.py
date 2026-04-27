@@ -11,6 +11,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.admin_routes import router as admin_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.api.cycle_calculator_routes import router as cycle_calculator_router
+from app.api.vps_routes import router as vps_router 
 from hedgebridge.listener_manager import listener_manager
 
 load_dotenv()
@@ -63,6 +64,10 @@ async def serve_dashboard():
 async def serve_mt5_connect():
     return FileResponse("static/mt5-connect.html")
 
+@app.get("/vps-connect")                          # ← NEW
+async def serve_vps_connect():
+    return FileResponse("static/vps-connect.html")
+
 @app.get("/cycle-calculator")
 async def serve_cycle_calculator():
     return FileResponse("static/cycle-calculator.html")
@@ -76,6 +81,7 @@ app.include_router(admin_router)
 app.include_router(metaconnect_router)
 app.include_router(dashboard_router)        # ← Added this
 app.include_router(cycle_calculator_router)
+app.include_router(vps_router)                    # ← NEW
 
 
 

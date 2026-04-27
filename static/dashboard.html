@@ -283,6 +283,10 @@
         <span class="ui-ico ui-ico-badge">M</span> MT5 - login &amp; Connect
       </a>
 
+      <a class="ui-nav-item" href="/vps-connect">
+        <span class="ui-ico ui-ico-badge">V</span> VPS - connect here
+      </a>
+
       <a class="ui-nav-item" href="/cycle-calculator" id="liveCalculatorLink">
         <span class="ui-ico ui-ico-badge">C</span> Cycle Calculator
       </a>
@@ -906,8 +910,9 @@ function renderAccountCards(accounts) {
                 title="${calcDisabled ? 'Calculator access disabled' : 'Open Cycle Calculator'}">
         📊
         </button>
-        <button class="ui-acc-action-btn btn-primary-hover"
-                title="Account terminal">
+        <button class="ui-acc-action-btn btn-primary-hover terminal-btn"
+                data-id="${acc.id}"
+                title="Open remote desktop terminal">
           🖥️
         </button>
       </div>
@@ -1004,35 +1009,41 @@ function attachCardActionListeners() {
   document.querySelectorAll(".deploy-btn").forEach(btn => {
     btn.addEventListener("click", () => handleDeployClick(btn));
   });
-    // Copy direction toggle
-    document.querySelectorAll(".copy-dir-btn").forEach(btn => {
-    btn.addEventListener("click", async () => {
-        const accountId = btn.dataset.id;
-        const role = btn.dataset.role;
-        if (role !== "slave") return;
+  // Terminal / VPS button — launches Guacamole remote desktop
+  document.querySelectorAll(".terminal-btn").forEach(btn => {
+    btn.addEventListener("click", () => openVpsForAccount(btn.dataset.id));
+  });
+  // Copy direction toggle
+  document.querySelectorAll(".copy-dir-btn").forEach(btn => {
+  btn.addEventListener("click", async () => {
+      const accountId = btn.dataset.id;
+      const role = btn.dataset.role;
+      if (role !== "slave") return;
 
-        const currentDir = btn.dataset.direction;
-        const newDir = currentDir === "same" ? "opposite" : "same";
+      const currentDir = btn.dataset.direction;
+      const newDir = currentDir === "same" ? "opposite" : "same";
 
-        try {
-        const res = await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
-            method: "POST",
-            headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-            body: JSON.stringify({ copy_direction: newDir })
-        });
-        if (res.ok) {
-            btn.dataset.direction = newDir;
-            btn.title = newDir === "opposite" ? "Opposite direction" : "Same direction";
-            btn.textContent = newDir === "opposite" ? "⬆️⬇️" : "⬆️⬆️";
-        } else {
-            const d = await res.json();
-            alert("Failed to update direction: " + (d.detail || "Unknown error"));
-        }
-        } catch (err) {
-        alert("Network error updating copy direction");
-        }
-    });
-    });
+      try {
+      const res = await fetch(`/mt5/accounts/${accountId}/copy-settings`, {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+          body: JSON.stringify({ copy_direction: newDir })
+      });
+      if (res.ok) {
+          btn.dataset.direction = newDir;
+          btn.title = newDir === "opposite" ? "Opposite direction" : "Same direction";
+          btn.textContent = newDir === "opposite" ? "⬆️⬇️" : "⬆️⬆️";
+      } else {
+          const d = await res.json();
+          alert("Failed to update direction: " + (d.detail || "Unknown error"));
+      }
+      } catch (err) {
+      alert("Network error updating copy direction");
+      }
+  });
+  });
+
+  
 }
 
 // ========================
@@ -1327,6 +1338,49 @@ async function closeTrade(positionId) {
     updateRealTimeTrades(selectedAccountId);
   } catch (err) {
     log(`❌ ${err.message}`);
+  }
+}
+
+async function openVpsForAccount(mt5AccountId) {
+  // 1️⃣  Find the VPS that is linked to this MT5 account
+  let vpsId;
+  try {
+    const res = await fetch(`/vps/accounts/by-mt5/${mt5AccountId}`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+ 
+    if (res.status === 404) {
+      // No VPS linked — send the user to the management page to add one
+      if (confirm("No VPS is linked to this account yet.\nOpen VPS management to add one?")) {
+        window.open("/vps-connect", "_blank");
+      }
+      return;
+    }
+ 
+    const data = await res.json();
+    vpsId = data.vps.id;
+  } catch (err) {
+    alert("Could not look up VPS: " + err.message);
+    return;
+  }
+ 
+  // 2️⃣  Ask the backend to provision a Guacamole session and get a URL
+  try {
+    const res = await fetch(`/vps/accounts/${vpsId}/launch`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+    const data = await res.json();
+ 
+    if (!res.ok) {
+      alert("Could not open terminal: " + (data.detail || "Unknown error"));
+      return;
+    }
+ 
+    // 3️⃣  Open the Guacamole client in a new tab — full remote desktop!
+    window.open(data.url, "_blank");
+ 
+  } catch (err) {
+    alert("Terminal launch failed: " + err.message);
   }
 }
 
