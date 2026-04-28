@@ -18,6 +18,7 @@ from abc import ABC
 from typing import List, Optional
 
 from typing_extensions import TypedDict
+import asyncio
 
 class HealthStatus(TypedDict, total=False):
     """Server-side application health status."""
@@ -179,11 +180,11 @@ class MetaApiTradeListener(ABC):
         pass
 
     async def on_positions_updated(self, instance_index, positions, removed_positions_ids):
-        db = SessionLocal()
+        tasks = []
 
         try:
             for position in positions:
-                ticket = str(position['id'])
+                ticket = str(position["id"])
 
                 current_sl = position.get("stopLoss")
                 current_tp = position.get("takeProfit")
@@ -199,10 +200,11 @@ class MetaApiTradeListener(ABC):
                         "tp": current_tp
                     }
 
-                    await copy_engine.handle_new_trade(
-                        db=db,
-                        master_account_id=self.account_id,
-                        position=position
+                    tasks.append(
+                        copy_engine.handle_new_trade(
+                            master_account_id=self.account_id,
+                            position=position
+                        )
                     )
                     continue
 
@@ -215,12 +217,13 @@ class MetaApiTradeListener(ABC):
                     if prev["sl"] != current_sl or prev["tp"] != current_tp:
                         print(f"✏️ MODIFY {self.account_id} → {ticket}")
 
-                        await copy_engine.handle_modify_trade(
-                            db=db,
-                            account_id=self.account_id,
-                            ticket=ticket,
-                            new_sl=current_sl,
-                            new_tp=current_tp
+                        tasks.append(
+                            copy_engine.handle_modify_trade(
+                                account_id=self.account_id,
+                                ticket=ticket,
+                                new_sl=current_sl,
+                                new_tp=current_tp
+                            )
                         )
 
                 # update cache
@@ -240,67 +243,19 @@ class MetaApiTradeListener(ABC):
                 if ticket in self._known_positions:
                     self._known_positions.remove(ticket)
 
-                    await copy_engine.handle_close_trade(
-                        db=db,
-                        account_id=self.account_id,
-                        closed_ticket=ticket
+                    tasks.append(
+                        copy_engine.handle_close_trade(
+                            account_id=self.account_id,
+                            closed_ticket=ticket
+                        )
                     )
 
+            # Run all tasks concurrently
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
         finally:
-            db.close()
-
-    # async def on_positions_updated(self, instance_index, positions, removed_positions_ids):
-    #     # if not self._initialized:
-    #     #     print("returning early from positions update because not initialized")
-    #     #     return  # safety guard
-    #     # if not self._active:
-    #     #     print("returning early from positions update because not active")
-    #     #     return  # safety guard
-
-    #     db = SessionLocal()
-
-    #     try:
-    #         # =========================
-    #         # NEW POSITIONS (OPEN TRADES)
-    #         # =========================
-    #         for position in positions:
-    #             ticket = str(position['id'])
-
-    #             if ticket not in self._known_positions:
-    #                 self._known_positions.add(ticket)
-
-    #                 print(f"📥 NEW TRADE {self.account_id} → {ticket}")
-
-    #                 await copy_engine.handle_new_trade(
-    #                     db=db,
-    #                     master_account_id=self.account_id,
-    #                     position=position
-    #                 )
-
-                    
-
-    #         # =========================
-    #         # CLOSED POSITIONS
-    #         # =========================
-    #         for ticket in removed_positions_ids:
-    #             ticket = str(ticket)
-
-    #             if ticket in self._known_positions:
-    #                 self._known_positions.remove(ticket)
-
-    #                 print(f"📤 CLOSED TRADE {self.account_id} → {ticket}")
-
-    #                 await copy_engine.handle_close_trade(
-    #                     db=db,
-    #                     account_id=self.account_id,
-    #                     closed_ticket=ticket
-    #                 )
-
-    #     except Exception as e:
-    #         print(f"❌ positions update error: {e}")
-
-    #     finally:
-    #         db.close()
+            pass
 
     async def on_position_updated(self, instance_index: str, position: MetatraderPosition):
         """Invoked when MetaTrader position is updated.
@@ -313,24 +268,6 @@ class MetaApiTradeListener(ABC):
             A coroutine which resolves when the asynchronous event is processed.
         """
         pass
-        # db = SessionLocal()
-
-        # try:
-        #     ticket = str(position['id'])
-
-        #     print(f"✏️ MODIFY TRADE {self.account_id} → {ticket}")
-
-        #     await copy_engine.handle_modify_trade(
-        #         db=db,
-        #         account_id=self.account_id,
-        #         position=position
-        #     )
-
-        # except Exception as e:
-        #     print(f"❌ position modify error: {e}")
-
-        # finally:
-        #     db.close()
 
     async def on_position_removed(self, instance_index: str, position_id: str):
         """Invoked when MetaTrader position is removed.
@@ -662,38 +599,3 @@ class MetaApiTradeListener(ABC):
         pass
 
 
-
-
-
-
-
-# async def on_position_removed(self, instance_index, position_id):
-#         db = SessionLocal()
-#         try:
-#             print(f"📤 CLOSE {self.account_id}")
-
-#             await copy_engine.handle_close_trade(
-#                 db=db,
-#                 master_account_id=self.account_id,
-#                 master_ticket=str(position_id)
-#             )
-
-#             await copy_engine.handle_slave_close(
-#                 db=db,
-#                 slave_ticket=str(position_id)
-#             )
-
-#         except Exception as e:
-#             print(f"❌ close error: {e}")
-#         finally:
-#             db.close()
-
-
-# async def on_positions_replaced(self, instance_index, positions):
-#         # if not self._initialized:
-#         #     for position in positions:
-#         #         self._known_positions.add(str(position['id']))
-
-#         #     self._initialized = True
-#         #     print(f"⚡ Initialized positions for {self.account_id}")
-#         pass
