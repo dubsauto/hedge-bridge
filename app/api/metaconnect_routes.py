@@ -1396,12 +1396,12 @@ async def get_positions(
         # Add timeout to prevent hanging forever
         connection = await asyncio.wait_for(
             trader._get_connection(metaapi_account_id),
-            timeout=10
+            timeout=20
         )
 
         positions = await asyncio.wait_for(
             connection.get_positions(),
-            timeout=15
+            timeout=30
         )
 
         return {"success": True, "positions": positions}
@@ -1413,6 +1413,13 @@ async def get_positions(
             "error": "MetaApi not ready (connection timeout)"
         }
 
+    except asyncio.CancelledError:
+        return {
+            "success": False,
+            "positions": [],
+            "error": "MetaApi connection was cancelled"
+        }
+    
     except Exception as e:
         return {
             "success": False,

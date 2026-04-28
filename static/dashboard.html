@@ -1320,7 +1320,7 @@ async function placeTrade(action) {
 function startTradesPolling(accountId) {
   if (tradesInterval) clearInterval(tradesInterval);
   updateRealTimeTrades(accountId);
-  tradesInterval = setInterval(() => updateRealTimeTrades(accountId), 3000);
+  tradesInterval = setInterval(() => updateRealTimeTrades(accountId), 10000);
 }
 
 async function closeTrade(positionId) {
@@ -1410,7 +1410,7 @@ function startLogsPolling(accountId) {
   if (logsInterval) clearInterval(logsInterval);
   if (!accountId) return;
   loadLogs(accountId);
-  logsInterval = setInterval(() => loadLogs(accountId), 2000);
+  logsInterval = setInterval(() => loadLogs(accountId), 15000);
 }
 
 function startHeartbeat(pageName) {
