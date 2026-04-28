@@ -192,6 +192,8 @@ class MT5AccountManager:
             try:
                 account = await self._get_account(account_id)
 
+                dedicated_ip = account.allocate_dedicated_ip if hasattr(account, "allocate_dedicated_ip") else None
+
                 # 🚫 Skip bad states (NO auto deploy)
                 if account.state != "DEPLOYED":
                     return {}
@@ -216,12 +218,12 @@ class MT5AccountManager:
                 # =========================
                 # DEDICATED IP
                 # =========================
-                dedicated_ip = None
-                try:
-                    if account.connections:
-                        dedicated_ip = account.connections[0].get("ip")
-                except Exception:
-                    pass
+                # dedicated_ip = None
+                # try:
+                #     if account.connections:
+                #         dedicated_ip = account.connections[0].get("ip")
+                # except Exception:
+                #     pass
 
                 result = {
                     "balance": info.get("balance"),

@@ -75,6 +75,7 @@ async def get_mt5_accounts(
                 "login": acc.login,
                 "server": acc.server,
                 "state": acc.state,
+                "magic": acc.magic,
                 "online": acc.connection_status == "connected",
                 "metaapi_account_id": acc.metaapi_account_id,
 

@@ -24,6 +24,7 @@ from typing import Optional
 GUAC_BASE_URL = os.getenv("GUAC_BASE_URL", "http://localhost:8080")
 GUAC_ADMIN_USER = os.getenv("GUAC_ADMIN_USER", "guacadmin")
 GUAC_ADMIN_PASS = os.getenv("GUAC_ADMIN_PASS", "guacadmin")
+GUAC_PUBLIC_URL = os.getenv("GUAC_PUBLIC_URL", GUAC_BASE_URL)
 
 # Guacamole stores connections in this data source when using MySQL
 DATA_SOURCE = "mysql"
@@ -131,11 +132,18 @@ async def _create_connection(
 # The Guacamole client URL encodes the connection as base64:
 #   base64( connection_id + "\x00" + "c" + "\x00" + data_source )
 # ─────────────────────────────────────────────────────────────
+# def _build_client_url(token: str, connection_id: str) -> str:
+#     raw = f"{connection_id}\x00c\x00{DATA_SOURCE}"
+#     client_id = base64.b64encode(raw.encode()).decode()
+#     # Return the full Guacamole URL — user lands on the remote desktop immediately
+#     return f"{GUAC_BASE_URL}/#/client/{client_id}?token={token}"
+
+
+
 def _build_client_url(token: str, connection_id: str) -> str:
     raw = f"{connection_id}\x00c\x00{DATA_SOURCE}"
     client_id = base64.b64encode(raw.encode()).decode()
-    # Return the full Guacamole URL — user lands on the remote desktop immediately
-    return f"{GUAC_BASE_URL}/#/client/{client_id}?token={token}"
+    return f"{GUAC_PUBLIC_URL}/#/client/{client_id}?token={token}"
 
 
 # ─────────────────────────────────────────────────────────────
