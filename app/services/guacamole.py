@@ -19,6 +19,7 @@ import os
 import base64
 import json
 import httpx
+from uuid import uuid4
 from typing import Optional
 
 GUAC_BASE_URL = os.getenv("GUAC_BASE_URL", "http://localhost:8080")
@@ -108,8 +109,8 @@ async def _create_connection(
         "parentIdentifier": "ROOT",
         "parameters": params,
         "attributes": {
-            "max-connections": "2",
-            "max-connections-per-user": "1",
+            "max-connections": "5",
+            "max-connections-per-user": "5",
         },
     }
 
@@ -165,7 +166,7 @@ async def get_launch_url(
         port = 22 if protocol == "ssh" else 3389
 
     # Stable connection name — one per VPS host+user combo
-    conn_name = f"HedgeBridge | {vps_host} ({vps_username})"
+    conn_name = f"HedgeBridge | {vps_host} ({vps_username}) | {uuid4()}"
 
     token = await _get_token()
 
