@@ -19,7 +19,6 @@ import os
 import base64
 import json
 import httpx
-from uuid import uuid4
 from typing import Optional
 
 GUAC_BASE_URL = os.getenv("GUAC_BASE_URL", "http://localhost:8080")
@@ -166,7 +165,7 @@ async def get_launch_url(
         port = 22 if protocol == "ssh" else 3389
 
     # Stable connection name — one per VPS host+user combo
-    conn_name = f"HedgeBridge | {vps_host} ({vps_username}) | {uuid4()}"
+    conn_name = f"HedgeBridge | {vps_host} ({vps_username})"
 
     token = await _get_token()
 
