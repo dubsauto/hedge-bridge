@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import Session
 from app.model import CopyRelationship, CopyTradeLink, TradingAccount, CopyTradeSettings, AccountLot
-from hedgebridge.trading import trader
+from hedgebridge.tradingListener import trader_listener
 from app.database import SessionLocal
 from app.services.logger import log
 from datetime import datetime
@@ -19,7 +19,7 @@ class CopyEngine:
     # =========================
     async def pips_to_price(self, account_id: str, symbol: str, pips: int) -> float:
         try:
-            connection = await trader._get_connection(account_id)
+            connection = await trader_listener._get_connection(account_id)
             spec = await connection.get_symbol_specification(symbol)
 
             point = spec.get("point", 0.0001)
@@ -183,7 +183,7 @@ class CopyEngine:
                 # -------------------------
                 if final_type == "POSITION_TYPE_BUY":
                     task = asyncio.wait_for(
-                        trader.buy(
+                        trader_listener.buy(
                             slave_acc.metaapi_account_id,
                             symbol,
                             final_volume,
@@ -196,7 +196,7 @@ class CopyEngine:
                     )
                 else:
                     task = asyncio.wait_for(
-                        trader.sell(
+                        trader_listener.sell(
                             slave_acc.metaapi_account_id,
                             symbol,
                             final_volume,
@@ -284,7 +284,7 @@ class CopyEngine:
             # =========================
             if failed:
                 try:
-                    await trader.close_position(
+                    await trader_listener.close_position(
                         master_acc.metaapi_account_id,
                         master_ticket
                     )
@@ -292,7 +292,7 @@ class CopyEngine:
                     pass
 
                 rollback_tasks = [
-                    trader.close_position(
+                    trader_listener.close_position(
                         acc.metaapi_account_id,
                         ticket
                     )
@@ -386,7 +386,7 @@ class CopyEngine:
             if account_id != master_account_id and master_acc:
                 execution_tasks.append(
                     asyncio.wait_for(
-                        trader.close_position(
+                        trader_listener.close_position(
                             master_acc.metaapi_account_id,
                             master_ticket
                         ),
@@ -419,7 +419,7 @@ class CopyEngine:
 
                 execution_tasks.append(
                     asyncio.wait_for(
-                        trader.close_position(
+                        trader_listener.close_position(
                             slave_acc.metaapi_account_id,
                             l.slave_ticket
                         ),
@@ -630,7 +630,7 @@ class CopyEngine:
 
                     execution_tasks.append(
                         asyncio.wait_for(
-                            trader.modify_position(
+                            trader_listener.modify_position(
                                 master_acc.metaapi_account_id,
                                 link.master_ticket,
                                 master_sl,
@@ -680,7 +680,7 @@ class CopyEngine:
 
                 execution_tasks.append(
                     asyncio.wait_for(
-                        trader.modify_position(
+                        trader_listener.modify_position(
                             slave_acc.metaapi_account_id,
                             l.slave_ticket,
                             final_sl,

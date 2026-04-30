@@ -10,8 +10,9 @@ from app.auth import SECRET_KEY, ALGORITHM, security, get_current_user
 from app.database import get_db
 from app.model import TradingAccount, User, CopyRelationship, BotLog, CopyTradeLink, AccountLot
 from app.services.logger import log
-from hedgebridge.account_management import account_manager   
-from hedgebridge.trading import trader
+from app.services.account_management import account_manager   
+from app.services.trading import trader
+from hedgebridge.rpc_pool import rpc_pool
 
 router = APIRouter(prefix="/mt5", tags=["MT5 Accounts"])
 
@@ -880,8 +881,6 @@ async def quick_trade(
         sl = data.get("sl")
         tp = data.get("tp")
 
-        
-
         sl = float(sl) if sl is not None else None
         tp = float(tp) if tp is not None else None
 
@@ -910,10 +909,11 @@ async def quick_trade(
         )
 
         # =========================
-        # 🔥 SL/TP PROCESSING
+        # SL/TP PROCESSING
         # =========================
         try:
-            connection = await trader._get_connection(account.metaapi_account_id)
+            # ✅ Use shared pool directly — no private method access
+            connection = await rpc_pool.get_connection(account.metaapi_account_id)
 
             symbol_spec = await connection.get_symbol_specification(symbol)
             symbol_price = await connection.get_symbol_price(symbol)
@@ -950,16 +950,12 @@ async def quick_trade(
             # POINTS MODE
             # -------------------------
             if sl_tp_mode == "points":
-
                 if sl is not None and sl <= 0:
                     raise Exception("SL must be > 0 in points mode")
-
                 if tp is not None and tp <= 0:
                     raise Exception("TP must be > 0 in points mode")
-
                 if sl is not None:
                     sl = entry_price - (sl * point) if action == "buy" else entry_price + (sl * point)
-
                 if tp is not None:
                     tp = entry_price + (tp * point) if action == "buy" else entry_price - (tp * point)
 
@@ -977,25 +973,22 @@ async def quick_trade(
             # -------------------------
             if sl is not None:
                 sl = round(sl, digits)
-
             if tp is not None:
                 tp = round(tp, digits)
 
             # -------------------------
-            # 🔥 BROKER STOP LEVEL CHECK
+            # BROKER STOP LEVEL CHECK
             # -------------------------
             min_distance = stops_level * point
 
             if sl is not None and abs(entry_price - sl) < min_distance:
                 raise Exception(f"SL too close (min distance: {round(min_distance, digits)})")
-
             if tp is not None and abs(entry_price - tp) < min_distance:
                 raise Exception(f"TP too close (min distance: {round(min_distance, digits)})")
 
             print(f"🎯 Final SL/TP → SL={sl}, TP={tp}, mode={sl_tp_mode}")
 
         except Exception as e:
-            # 🔴 LOG CONVERSION ERROR
             log(
                 db=db,
                 account_id=account_id,
@@ -1004,7 +997,6 @@ async def quick_trade(
                 message=f"SL/TP error: {str(e)}",
                 raw_json=data
             )
-
             raise HTTPException(status_code=400, detail=str(e))
 
         # =========================
@@ -1018,20 +1010,14 @@ async def quick_trade(
         if action == "buy":
             result = await trader.buy(
                 account.metaapi_account_id,
-                symbol,
-                volume,
-                sl,
-                tp,
+                symbol, volume, sl, tp,
                 comment="QuickTrade",
                 magic=magic
             )
         else:
             result = await trader.sell(
                 account.metaapi_account_id,
-                symbol,
-                volume,
-                sl,
-                tp,
+                symbol, volume, sl, tp,
                 comment="QuickTrade",
                 magic=magic
             )
@@ -1041,7 +1027,6 @@ async def quick_trade(
         # =========================
         if not result.get("success"):
             error_msg = result.get("error", "Unknown execution error")
-
             log(
                 db=db,
                 account_id=account_id,
@@ -1050,7 +1035,6 @@ async def quick_trade(
                 message=f"{action.upper()} failed: {error_msg}",
                 raw_json=result
             )
-
             raise HTTPException(status_code=500, detail=error_msg)
 
         # =========================
@@ -1072,7 +1056,6 @@ async def quick_trade(
         }
 
     except HTTPException as e:
-        # 🔴 LOG ALL HTTP ERRORS
         log(
             db=db,
             account_id=account_id,
@@ -1085,8 +1068,6 @@ async def quick_trade(
 
     except Exception as e:
         print(f"❌ Trade error: {e}")
-
-        # 🔴 CRITICAL ERROR
         log(
             db=db,
             account_id=account_id,
@@ -1095,151 +1076,11 @@ async def quick_trade(
             message=f"Trade exception: {str(e)}",
             raw_json=data
         )
-
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# # =========================
-# # QUICK TRADE (BUY / SELL)
-# # =========================
-# @router.post("/accounts/{account_id}/trade")
-# async def quick_trade(
-#     account_id: int,
-#     data: dict,
-#     payload: dict = Depends(get_current_user),
-#     db: Session = Depends(get_db)
-# ):
-#     try:
-#         print(f"⚡ Quick trade request for account {account_id} with data: {data}")
-#         user_id = payload.get("user_id")
 
-#         # =========================
-#         # VALIDATE ACCOUNT
-#         # =========================
-#         account = db.query(TradingAccount).filter(
-#             TradingAccount.id == account_id,
-#             TradingAccount.owner_user_id == user_id
-#         ).first()
-
-#         if not account:
-#             raise HTTPException(status_code=404, detail="Account not found")
-
-#         if not account.metaapi_account_id:
-#             raise HTTPException(status_code=400, detail="Account not connected to MetaAPI")
-
-#         if account.connection_status != "connected":
-#             raise HTTPException(status_code=400, detail="Account is not connected")
-
-#         # =========================
-#         # INPUTS
-#         # =========================
-#         action = data.get("action")
-#         symbol = data.get("symbol")
-#         sl_tp_mode = data.get("sl_tp_mode", "price")
-#         volume = float(data.get("volume", 0))
-#         fixed_lot_enabled = data.get("fixed_lot_enabled", False)
-
-#         if fixed_lot_enabled:
-#             lot_row = db.query(AccountLot).filter_by(account_id=account_id).first()
-#             if lot_row:
-#                 volume = lot_row.lot_size
-
-#         sl = data.get("sl")
-#         tp = data.get("tp")
-
-#         if action not in ["buy", "sell"]:
-#             raise HTTPException(status_code=400, detail="Invalid action (buy/sell only)")
-
-#         if not symbol or volume <= 0:
-#             raise HTTPException(status_code=400, detail="Invalid symbol or volume")
-
-#         # =========================
-#         # LOG INTENT
-#         # =========================
-        
-#         log(db=db,
-#             account_id=account_id,
-#             level="INFO",
-#             category="EXECUTION",
-#             message=f"User requested {action.upper()} {symbol} {volume}",
-#             raw_json=data
-#         )
-
-#         # =========================
-#         # MAGIC RULE
-#         # =========================
-#         magic = account.magic if not account.manual_trades else 0
-
-#         # =========================
-#         # EXECUTE TRADE
-#         # =========================
-#         if action == "buy":
-#             result = await trader.buy(
-#                 account.metaapi_account_id,
-#                 symbol,
-#                 volume,
-#                 sl,
-#                 tp,
-#                 comment="QuickTrade",
-#                 magic=magic
-#             )
-#         else:
-#             result = await trader.sell(
-#                 account.metaapi_account_id,
-#                 symbol,
-#                 volume,
-#                 sl,
-#                 tp,
-#                 comment="QuickTrade",
-#                 magic=magic
-#             )
-
-#         # =========================
-#         # RESPONSE
-#         # =========================
-#         if not result.get("success"):
-#             log(
-#                 db=db,
-#                 account_id=account_id,
-#                 level="ERROR",
-#                 category="EXECUTION",
-#                 message=f"{action.upper()} failed: {result.get('error')}"
-#             )
-
-#             raise HTTPException(status_code=500, detail=result.get("error"))
-
-#         # ✅ SUCCESS LOG
-#         log(db=db,
-#             account_id=account_id,
-#             level="TRADE",
-#             category="EXECUTION",
-#             message=f"{action.upper()} executed {symbol} {volume}",
-#             raw_json=result.get("result")
-#         )
-
-#         return {
-#             "success": True,
-#             "message": f"{action.upper()} order placed",
-#             "data": result.get("result")
-#         }
-
-#     except HTTPException as e:
-#         raise e
-
-#     except Exception as e:
-#         print(f"❌ Trade error: {e}")
-
-#         # 🔴 CRITICAL ERROR LOG
-#         log(db=db,
-#             account_id=account_id,
-#             level="ERROR",
-#             category="EXECUTION",
-#             message=f"Trade exception: {str(e)}",
-#         )
-
-#         raise HTTPException(status_code=500, detail=str(e))
-    
 # =========================
-# CLOSE TRADE
+# CLOSE POSITION
 # =========================
 @router.post("/accounts/{account_id}/close-position")
 async def close_position(
@@ -1255,9 +1096,6 @@ async def close_position(
         if not position_id:
             raise HTTPException(status_code=400, detail="position_id is required")
 
-        # =========================
-        # VALIDATE ACCOUNT OWNERSHIP
-        # =========================
         account = db.query(TradingAccount).filter(
             TradingAccount.id == account_id,
             TradingAccount.owner_user_id == user_id
@@ -1269,9 +1107,6 @@ async def close_position(
         if not account.metaapi_account_id:
             raise HTTPException(status_code=400, detail="Account not connected")
 
-        # =========================
-        # EXECUTE CLOSE
-        # =========================
         result = await trader.close_position(
             account.metaapi_account_id,
             position_id
@@ -1280,10 +1115,8 @@ async def close_position(
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error"))
 
-        # =========================
-        # LOG (VERY IMPORTANT)
-        # =========================
-        log(db=db,
+        log(
+            db=db,
             account_id=account_id,
             level="TRADE",
             message=f"Closed position {position_id}",
@@ -1302,7 +1135,6 @@ async def close_position(
         raise
     except Exception as e:
         print(f"❌ Close position error: {e}")
-        #log_error(db, account_id, f"Failed to close position {position_id}: {str(e)}")
         log(
             db=db,
             account_id=account_id,
@@ -1311,7 +1143,6 @@ async def close_position(
             message=f"Failed to close position {position_id}: {str(e)}",
         )
         db.commit()
-
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.get("/accounts/{account_id}/logs")

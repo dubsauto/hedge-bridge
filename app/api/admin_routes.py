@@ -18,7 +18,7 @@ from app.model import (
     CopyTradeLink,
     BotLog
 )
-from hedgebridge.account_management import account_manager
+from app.services.account_management import account_manager
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
