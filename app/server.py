@@ -29,8 +29,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def startup_event():
     print("🚀 Starting up - Creating database tables if they don't exist...")
     await init_database()
-    if not hasattr(app.state, "listener_task"):
-        app.state.listener_task = asyncio.create_task(listener_manager.start())
+    # if not hasattr(app.state, "listener_task"):
+    #     app.state.listener_task = asyncio.create_task(listener_manager.start())
 
 
 # =========================
