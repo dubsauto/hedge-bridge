@@ -14,21 +14,10 @@ class ListenerManager:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._running = False
-
-        # account_id -> listener instance
         self._listeners = {}
-
-        # account_id -> asyncio.Task (background sync task)
         self._sync_tasks = {}
-
-        # account_id -> timestamp when connection was registered
-        # used to give new connections a grace period before health checks
         self._connected_at = {}
-
-        # Tracks accounts currently mid-attach — prevents concurrent attempts
         self._attaching = set()
-
-        # singleton MetaApi client cache
         self._api = None
 
     # =====================================
@@ -40,6 +29,32 @@ class ListenerManager:
         return self._api
 
     # =====================================
+    # SET LISTENER ACTIVE FLAG IN DB
+    # =====================================
+    def _set_listener_active(self, account_id_or_metaapi_id, active: bool):
+        """
+        account_id_or_metaapi_id can be either:
+        - the DB integer id (TradingAccount.id)
+        - the metaapi UUID string (TradingAccount.metaapi_account_id)
+        """
+        db: Session = SessionLocal()
+        try:
+            if isinstance(account_id_or_metaapi_id, int):
+                db.query(TradingAccount).filter(
+                    TradingAccount.id == account_id_or_metaapi_id
+                ).update({"listener_active": active})
+            else:
+                db.query(TradingAccount).filter(
+                    TradingAccount.metaapi_account_id == account_id_or_metaapi_id
+                ).update({"listener_active": active})
+            db.commit()
+        except Exception as e:
+            print(f"⚠️ Failed to set listener_active={active} for {account_id_or_metaapi_id}: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    # =====================================
     # KEEP CONNECTIONS ALIVE
     # =====================================
     async def _keep_connections_alive(self):
@@ -48,7 +63,6 @@ class ListenerManager:
                 now = time.monotonic()
                 for account_id, connection in list(get_all_connections().items()):
                     try:
-                        # ✅ Grace period: skip health check for first 30s after attach
                         connected_at = self._connected_at.get(account_id, 0)
                         if now - connected_at < 30:
                             print(f"🕐 Grace period active → {account_id}, skipping health check")
@@ -126,13 +140,13 @@ class ListenerManager:
         finally:
             db.close()
 
-        # ✅ Health check with grace period — don't kill fresh connections
+        # Health check with grace period
         now = time.monotonic()
         for account_id, connection in list(get_all_connections().items()):
             try:
                 connected_at = self._connected_at.get(account_id, 0)
                 if now - connected_at < 30:
-                    continue  # still in grace period
+                    continue
 
                 health = getattr(connection, 'health_monitor', None)
                 status = getattr(health, 'health_status', None) if health else None
@@ -213,13 +227,13 @@ class ListenerManager:
                 connection.add_synchronization_listener(listener)
                 set_connection(account_id, connection)
                 self._listeners[account_id] = listener
-
-                # ✅ Record connection time for grace period
                 self._connected_at[account_id] = time.monotonic()
 
             print(f"👂 Listener attached → {account_id}")
 
-            # ✅ Store task reference so we can cancel it if connection is torn down
+            # ✅ Mark inactive until sync completes
+            self._set_listener_active(account_id, False)
+
             task = asyncio.create_task(
                 self._background_sync_wait(account_id, connection)
             )
@@ -242,30 +256,27 @@ class ListenerManager:
     # BACKGROUND SYNC WAIT
     # =====================================
     async def _background_sync_wait(self, account_id: str, connection):
-        """
-        Wait for sync in background without blocking listener registration.
-        Cancelled automatically when connection is torn down.
-        """
         for attempt in range(1, 4):
             try:
                 await asyncio.wait_for(connection.wait_synchronized(), timeout=120)
                 print(f"✅ Background sync complete → {account_id}")
+                # ✅ Fully synchronized — mark active
+                self._set_listener_active(account_id, True)
                 return
             except asyncio.CancelledError:
-                # ✅ Task was cancelled because connection was torn down — exit cleanly
                 print(f"🛑 Background sync cancelled → {account_id}")
                 return
             except asyncio.TimeoutError:
                 print(f"⏳ Background sync timeout (attempt {attempt}/3) → {account_id}")
             except Exception as e:
                 print(f"⚠️ Background sync error (attempt {attempt}/3) → {account_id}: {e}")
-                # ✅ If the connection was closed under us, stop retrying immediately
                 if "connection has been closed" in str(e).lower():
                     print(f"🛑 Connection closed, stopping background sync → {account_id}")
                     return
             await asyncio.sleep(5)
 
         print(f"⚠️ Sync never completed → {account_id}, listener still active")
+        # ✅ Leave listener_active=False — sync never confirmed
 
     # =====================================
     # CANCEL BACKGROUND SYNC TASK
@@ -287,7 +298,6 @@ class ListenerManager:
             self._attaching.discard(account_id)
             self._connected_at.pop(account_id, None)
 
-        # ✅ Cancel background sync before closing connection
         self._cancel_sync_task(account_id)
 
         if not connection:
@@ -312,6 +322,8 @@ class ListenerManager:
                 except Exception:
                     pass
 
+            # ✅ Mark inactive on clean removal
+            self._set_listener_active(account_id, False)
             print(f"🗑️ Listener removed → {account_id}")
 
         except Exception as e:
@@ -327,7 +339,6 @@ class ListenerManager:
             self._attaching.discard(account_id)
             self._connected_at.pop(account_id, None)
 
-        # ✅ Cancel background sync before closing connection
         self._cancel_sync_task(account_id)
 
         if connection:
@@ -351,11 +362,12 @@ class ListenerManager:
             except Exception:
                 pass
 
+        # ✅ Mark inactive on disconnect
+        self._set_listener_active(account_id, False)
         print(f"♻️ Marked for reconnection → {account_id}")
 
 
 # =====================================
 # SINGLETON
 # =====================================
-
 listener_manager = ListenerManager()

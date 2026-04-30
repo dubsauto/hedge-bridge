@@ -234,9 +234,20 @@
   min-height: 34px;
   justify-content: center;
 }
+
 .ui-dot{ width:10px; height:10px; border-radius:50%; display:inline-block; }
 .ui-dot.online{ background: var(--green); box-shadow: 0 0 12px rgba(46,242,161,.45); }
 .ui-dot.offline{ background: var(--red); box-shadow: 0 0 12px rgba(255,77,94,.35); }
+.ui-dot.syncing{
+    background: #f5a623;
+    box-shadow: 0 0 12px rgba(245,166,35,.45);
+    animation: pulse-syncing 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse-syncing {
+    0%, 100% { opacity: 1; box-shadow: 0 0 12px rgba(245,166,35,.45); }
+    50%       { opacity: 0.5; box-shadow: 0 0 4px rgba(245,166,35,.2); }
+}
 
 .ui-user{ display:flex; align-items:center; gap:10px; }
 .ui-avatar{

@@ -77,6 +77,9 @@ class TradingAccount(Base):
     last_connected_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
 
+    # ✅ NEW: tracks whether streaming listener is fully synchronized
+    listener_active = Column(Boolean, default=False)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     owner = relationship("User", back_populates="accounts")

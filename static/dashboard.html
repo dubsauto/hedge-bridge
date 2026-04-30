@@ -544,6 +544,40 @@ let tradesInterval = null;
 let currentMappings = [];
 let canUseCalculator = false;
 
+// ========================
+// LIVE CARD POLLING
+// ========================
+let cardsPollingInterval = null;
+
+async function refreshCards() {
+  try {
+    const res = await fetch("/mt5/accounts", { headers: { "Authorization": "Bearer " + token } });
+    if (!res.ok) return;
+    const data = await res.json();
+    const fresh = (data.accounts || []).sort((a, b) => a.id - b.id);
+
+    // ✅ Update currentAccounts data in place so other functions stay in sync
+    currentAccounts = fresh;
+
+    // ✅ Re-render only the cards — not the selector, tree, or mappings
+    renderAccountCards(currentAccounts);
+    updateCopySummary();
+    renderCopyTree();
+
+    // ✅ Keep the live overview bar in sync with selected account
+    if (selectedAccountId) {
+      updateLiveOverview(selectedAccountId);
+    }
+  } catch (err) {
+    console.error("Card refresh failed:", err);
+  }
+}
+
+function startCardsPolling(intervalMs = 15000) {
+  if (cardsPollingInterval) clearInterval(cardsPollingInterval);
+  cardsPollingInterval = setInterval(refreshCards, intervalMs);
+}
+
 // Logout
 document.getElementById("logoutBtn").addEventListener("click", () => {
   localStorage.removeItem("token");
@@ -774,6 +808,22 @@ function renderAccountCards(accounts) {
 
   accounts.forEach(acc => {
     const isDeployed = acc.state === "deployed" || acc.online === true;
+    const listenerActive = acc.listener_active === true;
+
+    let statusDotClass, statusText, statusBadgeStyle;
+    if (isDeployed && listenerActive) {
+        statusDotClass = "online";
+        statusText = "Connected";
+        statusBadgeStyle = "";
+    } else if (isDeployed && !listenerActive) {
+        statusDotClass = "syncing";
+        statusText = "Syncing...";
+        statusBadgeStyle = "border-color: #f5a623; background: #fffbf0;";
+    } else {
+        statusDotClass = "offline";
+        statusText = "Disconnected";
+        statusBadgeStyle = "";
+    }
     const role = acc.copy_role || "none";
     const roleDisplay = role.toUpperCase();
     const hasMasters = currentAccounts.some(a => a.copy_role === "master" && a.id !== acc.id);
@@ -798,7 +848,7 @@ function renderAccountCards(accounts) {
     const calcDisabled = !canUseCalculator;
     const card = document.createElement("div");
     
-    card.className = `ui-acc-card ${isDeployed ? 'glow' : ''}`;
+    card.className = `ui-acc-card ${(isDeployed && listenerActive) ? 'glow' : ''}`;
 
     card.innerHTML = `
       <!-- TOP ROW: name + status/role -->
@@ -809,9 +859,9 @@ function renderAccountCards(accounts) {
         </div>
 
         <div class="ui-acc-right-top">
-          <div class="ui-acc-status-badge">
-            <span class="ui-dot ${isDeployed ? 'online' : 'offline'}"></span>
-            <span>${isDeployed ? 'Connected' : 'Disconnected'}</span>
+          <div class="ui-acc-status-badge" style="${statusBadgeStyle}">
+            <span class="ui-dot ${statusDotClass}"></span>
+            <span>${statusText}</span>
           </div>
 
           <div class="ui-acc-role-picker" data-account-id="${acc.id}">
@@ -1577,6 +1627,7 @@ async function updatePendingBadge() {
 // Start
 loadDashboard();
 startHeartbeat("dashboard");
+startCardsPolling(15000); // ✅ refresh cards every 15 seconds
 </script>
 </body>
 </html>

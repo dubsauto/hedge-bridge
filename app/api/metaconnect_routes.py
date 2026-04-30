@@ -71,15 +71,15 @@ async def get_mt5_accounts(
 
             account_data.append({
                 "id": acc.id,
-                "db_id": acc.id,  # optional clarity for frontend
+                "db_id": acc.id,
                 "name": acc.name,
                 "login": acc.login,
                 "server": acc.server,
                 "state": acc.state,
                 "magic": acc.magic,
                 "online": acc.connection_status == "connected",
+                "listener_active": acc.listener_active or False,   # ✅ NEW
                 "metaapi_account_id": acc.metaapi_account_id,
-
                 "copy_role": role,
                 "master_account_id": master_account_id,
                 "master_name": master_name,
