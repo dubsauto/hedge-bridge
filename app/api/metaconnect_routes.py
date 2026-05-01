@@ -1227,7 +1227,7 @@ async def get_positions(
 
         # Add timeout to prevent hanging forever
         connection = await asyncio.wait_for(
-            trader._get_connection(metaapi_account_id),
+            rpc_pool.get_connection(account.metaapi_account_id),
             timeout=20
         )
 
