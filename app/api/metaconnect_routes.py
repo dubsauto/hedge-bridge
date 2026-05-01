@@ -186,6 +186,9 @@ async def deploy_mt5_account(
             message="Deploy request initiated"
         )
 
+        if trading_account.metaapi_account_id:
+            await rpc_pool.invalidate(trading_account.metaapi_account_id)
+
         result = await account_manager.deploy(trading_account.metaapi_account_id)
         print(result)
 

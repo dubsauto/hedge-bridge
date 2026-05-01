@@ -15,10 +15,12 @@ class RpcConnectionPool:
         self._verified_at: Dict[str, float] = {}
         self._failure_count: Dict[str, int] = {}
 
-        # Per-account locks — so two callers for account A don't block account B
+        # Per-account build locks — prevents duplicate builds for same account
         self._account_locks: Dict[str, asyncio.Lock] = {}
-        # Separate lock just for mutating the dicts above
-        self._dict_lock = asyncio.Lock()
+
+        # Cooldown: after a hard reset, don't immediately retry
+        self._cooldown_until: Dict[str, float] = {}
+        self._cooldown_seconds = 30
 
         self._verify_ttl = 10
         self._max_failures = 3
@@ -35,7 +37,7 @@ class RpcConnectionPool:
         return self._account_locks[account_id]
 
     # =====================================
-    # START WATCHDOG
+    # WATCHDOG
     # =====================================
     def start_watchdog(self):
         if self._watchdog_task is None or self._watchdog_task.done():
@@ -51,9 +53,7 @@ class RpcConnectionPool:
                 print(f"[RpcPool] Watchdog error: {e}")
 
     async def _health_check_all(self):
-        async with self._dict_lock:
-            account_ids = list(self._connections.keys())
-
+        account_ids = list(self._connections.keys())
         for account_id in account_ids:
             try:
                 connection = self._connections.get(account_id)
@@ -68,12 +68,11 @@ class RpcConnectionPool:
                 self._failure_count[account_id] = count
                 print(f"[RpcPool] Watchdog fail [{count}/{self._max_failures}] → {account_id}: {e}")
                 if count >= self._max_failures:
-                    print(f"[RpcPool] Max failures reached → full reset for {account_id}")
                     async with self._get_account_lock(account_id):
                         await self._hard_reset(account_id)
 
     # =====================================
-    # GET API SINGLETON
+    # API SINGLETON
     # =====================================
     async def _get_api(self):
         if self._api is None:
@@ -82,12 +81,10 @@ class RpcConnectionPool:
 
     def _maybe_reset_sdk(self):
         now = time.monotonic()
-        self._hard_reset_times = [
-            t for t in self._hard_reset_times if now - t < self._sdk_reset_window
-        ]
+        self._hard_reset_times = [t for t in self._hard_reset_times if now - t < self._sdk_reset_window]
         self._hard_reset_times.append(now)
         if len(self._hard_reset_times) >= self._sdk_reset_threshold:
-            print(f"[RpcPool] {self._sdk_reset_threshold} hard resets in {self._sdk_reset_window}s → resetting SDK")
+            print(f"[RpcPool] {self._sdk_reset_threshold} hard resets → resetting SDK")
             try:
                 self._api = reset_metaapi_client()
                 self._hard_reset_times.clear()
@@ -108,13 +105,23 @@ class RpcConnectionPool:
         return account
 
     # =====================================
-    # GET RPC CONNECTION (SHARED)
-    # Per-account lock prevents concurrent builds for the same account
-    # without blocking other accounts
+    # GET CONNECTION
     # =====================================
     async def get_connection(self, account_id: str):
+        # Check cooldown BEFORE acquiring lock — fast rejection
+        cooldown_until = self._cooldown_until.get(account_id, 0)
+        if time.monotonic() < cooldown_until:
+            remaining = round(cooldown_until - time.monotonic(), 1)
+            raise Exception(f"[RpcPool] Account {account_id} in cooldown for {remaining}s after reset")
+
         lock = self._get_account_lock(account_id)
         async with lock:
+            # Re-check cooldown inside lock
+            cooldown_until = self._cooldown_until.get(account_id, 0)
+            if time.monotonic() < cooldown_until:
+                remaining = round(cooldown_until - time.monotonic(), 1)
+                raise Exception(f"[RpcPool] Account {account_id} in cooldown for {remaining}s after reset")
+
             connection = self._connections.get(account_id)
             last_verified = self._verified_at.get(account_id, 0)
             now = time.monotonic()
@@ -123,13 +130,10 @@ class RpcConnectionPool:
             if connection and (now - last_verified) < self._verify_ttl:
                 return connection
 
-            # Probe existing connection — but outside the dict_lock
-            # so we're not blocking other accounts
+            # Probe existing connection
             if connection:
                 try:
-                    await asyncio.wait_for(
-                        connection.get_account_information(), timeout=3
-                    )
+                    await asyncio.wait_for(connection.get_account_information(), timeout=3)
                     self._verified_at[account_id] = now
                     self._failure_count[account_id] = 0
                     return connection
@@ -138,15 +142,13 @@ class RpcConnectionPool:
                     self._failure_count[account_id] = count
                     print(f"[RpcPool] Stale connection [{count}/{self._max_failures}] → {account_id}")
 
-                    # Always close the old connection before discarding it
                     await self._close_connection_safely(connection, account_id)
                     self._connections.pop(account_id, None)
                     self._verified_at.pop(account_id, None)
 
                     if count >= self._max_failures:
-                        print(f"[RpcPool] Max failures → hard reset {account_id}")
                         await self._hard_reset(account_id)
-                        # _hard_reset cleared failure count, now rebuild below
+                        raise Exception(f"[RpcPool] {account_id} hard reset after {count} failures, retry after cooldown")
 
             # Build fresh connection
             try:
@@ -157,23 +159,27 @@ class RpcConnectionPool:
                 return connection
             except Exception as e:
                 print(f"[RpcPool] Build failed → {account_id}: {e}")
+                # Apply cooldown so callers stop hammering a broken account
+                self._cooldown_until[account_id] = time.monotonic() + self._cooldown_seconds
                 raise
 
     # =====================================
-    # SAFELY CLOSE A CONNECTION
-    # Ensures SDK internal tasks are actually stopped
+    # CLOSE SAFELY
     # =====================================
     async def _close_connection_safely(self, connection, account_id: str):
         try:
             await asyncio.wait_for(connection.close(), timeout=10)
             print(f"[RpcPool] Closed connection → {account_id}")
         except asyncio.TimeoutError:
-            print(f"[RpcPool] Close timed out (SDK may have zombie tasks) → {account_id}")
+            print(f"[RpcPool] Close timed out → {account_id}")
         except Exception as e:
             print(f"[RpcPool] Close error → {account_id}: {e}")
 
     # =====================================
-    # BUILD FRESH CONNECTION
+    # BUILD CONNECTION
+    # The key fix: don't rely on account.connection_status.
+    # Instead wait for the RPC connection itself to synchronize,
+    # with a hard timeout so we never hang forever.
     # =====================================
     async def _build_connection(self, account_id: str):
         self._accounts.pop(account_id, None)
@@ -184,29 +190,41 @@ class RpcConnectionPool:
             await account.deploy()
             await asyncio.sleep(5)
 
-        for i in range(60):
+        # Wait for MetaApi to report the account is connected to broker
+        # using account.reload() — but cap it so we don't hang indefinitely
+        print(f"[RpcPool] Waiting for broker connection → {account_id}")
+        for i in range(30):  # max 30s
             try:
                 await account.reload()
             except Exception:
                 pass
 
-            if account.connection_status == "CONNECTED":
+            state = getattr(account, 'connection_status', None)
+            if state == "CONNECTED":
                 break
 
-            print(f"[RpcPool] Waiting broker connection [{i+1}/60] → {account_id}")
+            print(f"[RpcPool] Waiting broker connection [{i+1}/30] → {account_id} (status: {state})")
             await asyncio.sleep(1)
         else:
-            raise Exception(f"[RpcPool] Broker not connected after 60s → {account_id}")
+            # Don't raise yet — some brokers report DISCONNECTED even when RPC works.
+            # Let wait_synchronized() be the real gate.
+            print(f"[RpcPool] Broker status not CONNECTED after 30s → {account_id}, attempting RPC anyway")
 
         connection = account.get_rpc_connection()
         await connection.connect()
-        await connection.wait_synchronized()
+
+        # This is the real gate. Give it a hard timeout so we never hang.
+        try:
+            await asyncio.wait_for(connection.wait_synchronized(), timeout=30)
+        except asyncio.TimeoutError:
+            await self._close_connection_safely(connection, account_id)
+            raise Exception(f"[RpcPool] wait_synchronized timed out → {account_id}. Broker may not be reachable.")
 
         print(f"[RpcPool] Connection ready → {account_id}")
         return connection
 
     # =====================================
-    # HARD RESET — always close before clearing
+    # HARD RESET
     # Must be called while holding the account lock
     # =====================================
     async def _hard_reset(self, account_id: str, count_toward_sdk_reset: bool = True):
@@ -216,6 +234,7 @@ class RpcConnectionPool:
         self._accounts.pop(account_id, None)
         self._verified_at.pop(account_id, None)
         self._failure_count[account_id] = 0
+        self._cooldown_until[account_id] = time.monotonic() + self._cooldown_seconds
 
         if connection:
             await self._close_connection_safely(connection, account_id)
@@ -227,11 +246,12 @@ class RpcConnectionPool:
         lock = self._get_account_lock(account_id)
         async with lock:
             await self._hard_reset(account_id, count_toward_sdk_reset=False)
+            # Clear cooldown on explicit invalidate (e.g. after undeploy→redeploy)
+            self._cooldown_until.pop(account_id, None)
         print(f"[RpcPool] Invalidated → {account_id}")
 
     async def invalidate_all(self):
-        async with self._dict_lock:
-            account_ids = list(self._connections.keys())
+        account_ids = list(self._connections.keys())
         for account_id in account_ids:
             await self.invalidate(account_id)
 
