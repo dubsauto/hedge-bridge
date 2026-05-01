@@ -119,7 +119,7 @@ class ListenerManager:
         db: Session = SessionLocal()
         try:
             accounts = db.query(TradingAccount).filter(
-                TradingAccount.state == "DEPLOYED"
+                TradingAccount.state.upper() == "DEPLOYED"
             ).all()
 
             for acc in accounts:
@@ -307,7 +307,7 @@ class ListenerManager:
             api = await self._get_api()
             account = await api.metatrader_account_api.get_account(account_id)
 
-            if account.state != "DEPLOYED":
+            if account.state.upper() != "DEPLOYED":
                 print(f"🚀 Nuclear deploy → {account_id}")
                 await account.deploy()
                 await asyncio.sleep(DEPLOY_WAIT)
@@ -402,7 +402,7 @@ class ListenerManager:
             api = await self._get_api()
             account = await api.metatrader_account_api.get_account(account_id)
 
-            if account.state != "DEPLOYED":
+            if account.state.upper() != "DEPLOYED":
                 print(f"🚀 Deploying → {account_id}")
                 await account.deploy()
                 await asyncio.sleep(DEPLOY_WAIT)
