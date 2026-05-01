@@ -913,6 +913,7 @@ async def quick_trade(
         # =========================
         try:
             # ✅ Use shared pool directly — no private method access
+            print(f"[Route] rpc_pool id: {id(rpc_pool)}")
             connection = await rpc_pool.get_connection(account.metaapi_account_id)
 
             symbol_spec = await connection.get_symbol_specification(symbol)
@@ -1257,44 +1258,3 @@ async def get_positions(
             "positions": [],
             "error": str(e)
         }
-        # for acc in accounts:
-        #     # Determine role from CopyRelationship
-        #     # Determine role from CopyRelationship
-        #     as_master = db.query(CopyRelationship).filter(
-        #         CopyRelationship.master_account_id == acc.id,
-        #         CopyRelationship.slave_account_id.is_(None)   # or just check existence
-        #     ).first()
-
-        #     as_slave_rel = db.query(CopyRelationship).filter(
-        #         CopyRelationship.slave_account_id == acc.id
-        #     ).first()
-
-        #     role = "none"
-        #     master_account_id = None
-        #     copy_direction = "same"
-        #     strict_mode = False
-
-        #     if as_master:
-        #         role = "master"
-        #     elif as_slave_rel:
-        #         role = "slave"
-        #         master_account_id = as_slave_rel.master_account_id
-        #         copy_direction = as_slave_rel.copy_direction
-        #         strict_mode = as_slave_rel.strict_mode
-
-        #     account_list.append({
-        #         "id": acc.id,
-        #         "name": acc.name,
-        #         "login": acc.login,
-        #         "server": acc.server,
-        #         "magic": acc.magic,
-        #         "manual_trades": acc.manual_trades,
-        #         "use_dedicated_ip": acc.use_dedicated_ip,
-        #         "metaapi_account_id": acc.metaapi_account_id,
-        #         "state": acc.state,
-        #         "online": acc.connection_status == "connected",
-        #         "copy_role": role,
-        #         "master_account_id": master_account_id,
-        #         "copy_direction": copy_direction,
-        #         "strict_mode": strict_mode
-        #     })

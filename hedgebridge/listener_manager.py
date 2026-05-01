@@ -10,10 +10,10 @@ from hedgebridge.connection_store import set_connection, get_connection, remove_
 import time
 
 
-GRACE_PERIOD = 60        # increased from 30 → give sync time to complete
-KEEPALIVE_INTERVAL = 45  # increased from 30 → don't race with grace period
-SYNC_TIMEOUT = 180       # increased from 120
-DEPLOY_WAIT = 8          # increased from 5
+GRACE_PERIOD = 60
+KEEPALIVE_INTERVAL = 45
+SYNC_TIMEOUT = 180
+DEPLOY_WAIT = 8
 
 
 class ListenerManager:
@@ -26,12 +26,20 @@ class ListenerManager:
         self._attaching = set()
         self._api = None
         self._reconnect_queue = asyncio.Queue()
+        self._reconnect_attempts = {}
+        self._reconnect_limit = 5
 
+    # =====================================
+    # GET METAAPI SINGLETON
+    # =====================================
     async def _get_api(self):
         if self._api is None:
             self._api = get_metaapi_client()
         return self._api
 
+    # =====================================
+    # SET LISTENER ACTIVE FLAG IN DB
+    # =====================================
     def _set_listener_active(self, account_id_or_metaapi_id, active: bool):
         db: Session = SessionLocal()
         try:
@@ -51,8 +59,7 @@ class ListenerManager:
             db.close()
 
     # =====================================
-    # KEEPALIVE — only checks, never kills
-    # during grace period AND sync
+    # KEEPALIVE
     # =====================================
     async def _keep_connections_alive(self):
         while True:
@@ -69,7 +76,7 @@ class ListenerManager:
                             print(f"🕐 Grace period active → {account_id}, skipping health check")
                             continue
 
-                        # Check if sync task is still running — don't kill during sync
+                        # Don't kill while sync is still running
                         sync_task = self._sync_tasks.get(account_id)
                         if sync_task and not sync_task.done():
                             print(f"⏳ Sync in progress → {account_id}, skipping keepalive kill")
@@ -90,7 +97,7 @@ class ListenerManager:
                 await asyncio.sleep(10)
 
     # =====================================
-    # START
+    # START MANAGER
     # =====================================
     async def start(self):
         if self._running:
@@ -112,16 +119,29 @@ class ListenerManager:
                 await asyncio.sleep(3)
 
     # =====================================
-    # RECONNECT WORKER — serializes reconnects
-    # prevents pile-up of parallel attach attempts
+    # RECONNECT WORKER
     # =====================================
     async def _reconnect_worker(self):
-        """Drain reconnect queue with backoff to avoid hammering MetaApi."""
         while True:
             try:
                 account_id = await self._reconnect_queue.get()
-                # small backoff before reconnecting
-                await asyncio.sleep(5)
+
+                attempts = self._reconnect_attempts.get(account_id, 0) + 1
+                self._reconnect_attempts[account_id] = attempts
+
+                print(f"🔁 Reconnect attempt {attempts}/{self._reconnect_limit} → {account_id}")
+
+                if attempts >= self._reconnect_limit:
+                    print(f"💣 Reconnect limit hit → {account_id}, triggering nuclear reset")
+                    self._reconnect_attempts.pop(account_id, None)
+                    await self._nuclear_reset(account_id)
+                    self._reconnect_queue.task_done()
+                    continue
+
+                # Backoff scales with attempts: 5s, 10s, 15s, 20s, capped at 60s
+                backoff = min(5 * attempts, 60)
+                print(f"⏳ Backoff {backoff}s before reconnect → {account_id}")
+                await asyncio.sleep(backoff)
 
                 db: Session = SessionLocal()
                 try:
@@ -133,12 +153,84 @@ class ListenerManager:
 
                 if acc:
                     await self._ensure_listener(acc)
+                else:
+                    print(f"⚠️ Account not found in DB → {account_id}, skipping reconnect")
 
                 self._reconnect_queue.task_done()
 
             except Exception as e:
                 print(f"❌ Reconnect worker error: {e}")
                 await asyncio.sleep(5)
+
+    # =====================================
+    # NUCLEAR RESET
+    # =====================================
+    async def _nuclear_reset(self, account_id: str):
+        print(f"☢️ Nuclear reset starting → {account_id}")
+
+        # Step 1: Full teardown
+        async with self._lock:
+            connection = get_connection(account_id)
+            listener = self._listeners.pop(account_id, None)
+            self._attaching.discard(account_id)
+            self._connected_at.pop(account_id, None)
+
+        self._cancel_sync_task(account_id)
+
+        if listener:
+            try:
+                listener._known_positions.clear()
+                listener._position_cache.clear()
+                listener._disconnected = False
+            except Exception:
+                pass
+
+        if connection:
+            try:
+                if listener:
+                    connection.remove_synchronization_listener(listener)
+            except Exception:
+                pass
+            try:
+                await connection.close()
+            except Exception:
+                pass
+            try:
+                remove_connection(account_id)
+            except Exception:
+                pass
+
+        self._set_listener_active(account_id, False)
+        print(f"🧹 Nuclear teardown complete → {account_id}")
+
+        # Step 2: Wait before cold restart
+        await asyncio.sleep(15)
+
+        # Step 3: Undeploy → redeploy to force fresh socket on MetaApi side
+        try:
+            api = await self._get_api()
+            account = await api.metatrader_account_api.get_account(account_id)
+
+            if account.state != "DEPLOYED":
+                print(f"🚀 Nuclear deploy → {account_id}")
+                await account.deploy()
+                await asyncio.sleep(DEPLOY_WAIT)
+            else:
+                print(f"🔄 Nuclear undeploy → redeploy → {account_id}")
+                await account.undeploy()
+                await asyncio.sleep(10)
+                await account.deploy()
+                await asyncio.sleep(DEPLOY_WAIT)
+
+        except Exception as e:
+            print(f"⚠️ Nuclear redeploy failed → {account_id}: {e}")
+
+        # Step 4: Queue fresh reconnect with clean counter
+        print(f"🔁 Queuing fresh reconnect after nuclear reset → {account_id}")
+        try:
+            self._reconnect_queue.put_nowait(account_id)
+        except Exception:
+            pass
 
     # =====================================
     # DB SYNC + HEALTH CHECK
@@ -168,7 +260,7 @@ class ListenerManager:
         finally:
             db.close()
 
-        # Health check — respects grace period AND active sync
+        # Health check — respects grace period and active sync tasks
         now = time.monotonic()
         for account_id, connection in list(get_all_connections().items()):
             try:
@@ -176,7 +268,6 @@ class ListenerManager:
                 if now - connected_at < GRACE_PERIOD:
                     continue
 
-                # Don't kill while syncing
                 sync_task = self._sync_tasks.get(account_id)
                 if sync_task and not sync_task.done():
                     continue
@@ -192,7 +283,7 @@ class ListenerManager:
                 pass
 
     # =====================================
-    # ENSURE LISTENER
+    # ENSURE LISTENER EXISTS
     # =====================================
     async def _ensure_listener(self, acc: TradingAccount):
         account_id = acc.metaapi_account_id
@@ -201,6 +292,7 @@ class ListenerManager:
             if get_connection(account_id) is not None:
                 return
             if account_id in self._attaching:
+                print(f"⏸️ Already attaching → {account_id}, skipping")
                 return
             self._attaching.add(account_id)
 
@@ -220,6 +312,7 @@ class ListenerManager:
             print(f"⏳ Waiting for broker connection → {account_id}")
             timeout = 60
             connected = False
+
             for i in range(timeout):
                 try:
                     await account.reload()
@@ -293,23 +386,29 @@ class ListenerManager:
                 )
                 print(f"✅ Background sync complete → {account_id}")
                 self._set_listener_active(account_id, True)
+                # Reset reconnect counter on successful sync
+                self._reconnect_attempts.pop(account_id, None)
                 return
+
             except asyncio.CancelledError:
                 print(f"🛑 Background sync cancelled → {account_id}")
                 return
+
             except asyncio.TimeoutError:
                 print(f"⏳ Background sync timeout (attempt {attempt}/3) → {account_id}")
+
             except Exception as e:
                 print(f"⚠️ Background sync error (attempt {attempt}/3) → {account_id}: {e}")
                 if "connection has been closed" in str(e).lower():
                     print(f"🛑 Connection closed, stopping background sync → {account_id}")
                     return
+
             await asyncio.sleep(5)
 
-        print(f"⚠️ Sync never completed → {account_id}")
+        print(f"⚠️ Sync never completed after 3 attempts → {account_id}")
 
     # =====================================
-    # CANCEL SYNC TASK
+    # CANCEL BACKGROUND SYNC TASK
     # =====================================
     def _cancel_sync_task(self, account_id: str):
         task = self._sync_tasks.pop(account_id, None)
@@ -317,7 +416,7 @@ class ListenerManager:
             task.cancel()
 
     # =====================================
-    # REMOVE LISTENER
+    # REMOVE LISTENER (clean removal)
     # =====================================
     async def _remove_listener(self, acc: TradingAccount):
         account_id = acc.metaapi_account_id
@@ -359,13 +458,12 @@ class ListenerManager:
             print(f"❌ Remove failed {account_id}: {e}")
 
     # =====================================
-    # MARK DISCONNECTED — queues reconnect
-    # instead of directly re-attaching
+    # MARK DISCONNECTED
     # =====================================
     async def mark_disconnected(self, account_id: str):
         async with self._lock:
-            # Prevent double-processing
-            if account_id not in self._listeners and account_id not in get_all_connections():
+            # Prevent double-processing if already cleaned up
+            if account_id not in self._listeners and get_connection(account_id) is None:
                 return
 
             connection = get_connection(account_id)
@@ -399,11 +497,14 @@ class ListenerManager:
         self._set_listener_active(account_id, False)
         print(f"♻️ Marked for reconnection → {account_id}")
 
-        # Queue reconnect instead of letting _sync race to do it
+        # Queue reconnect — worker handles backoff and nuclear reset
         try:
             self._reconnect_queue.put_nowait(account_id)
         except asyncio.QueueFull:
-            pass  # already queued
+            pass
 
 
+# =====================================
+# SINGLETON
+# =====================================
 listener_manager = ListenerManager()

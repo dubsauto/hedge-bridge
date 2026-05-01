@@ -12,6 +12,7 @@ from app.api.admin_routes import router as admin_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.api.cycle_calculator_routes import router as cycle_calculator_router
 from app.api.vps_routes import router as vps_router 
+from hedgebridge import rpc_pool
 from hedgebridge.listener_manager import listener_manager
 
 load_dotenv()
@@ -29,6 +30,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def startup_event():
     print("🚀 Starting up - Creating database tables if they don't exist...")
     await init_database()
+    print(f"[Startup] rpc_pool id: {id(rpc_pool)}")
+    rpc_pool.start_watchdog()
+    
+
     # if not hasattr(app.state, "listener_task"):
     #     app.state.listener_task = asyncio.create_task(listener_manager.start())
 
