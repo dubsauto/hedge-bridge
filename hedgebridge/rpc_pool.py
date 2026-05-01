@@ -146,7 +146,7 @@ class RpcConnectionPool:
                     self._verified_at[account_id] = now
                     self._failure_count[account_id] = 0
                     return connection
-                except Exception:
+                except BaseException:   # catches CancelledError too
                     count = self._failure_count.get(account_id, 0) + 1
                     self._failure_count[account_id] = count
                     print(f"[RpcPool] Stale connection [{count}/{self._max_failures}] → {account_id}, reconnecting")

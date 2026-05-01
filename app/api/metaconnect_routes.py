@@ -97,7 +97,6 @@ async def get_mt5_accounts(
         # STEP 4: ASYNC METRICS (CLEAN + FAST)
         # =========================
         import asyncio
-
         async def fetch_metrics(acc):
             try:
                 deployed = (
@@ -111,15 +110,15 @@ async def get_mt5_accounts(
 
                 return await asyncio.wait_for(
                     account_manager.get_account_metrics(acc["metaapi_account_id"]),
-                    timeout=6  # shorter since manager is optimized
+                    timeout=6
                 )
 
-            except Exception:
+            except BaseException:   # catches CancelledError
                 return {}
 
         tasks = [fetch_metrics(acc) for acc in account_data]
 
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # =========================
         # STEP 5: BUILD RESPONSE
@@ -127,7 +126,7 @@ async def get_mt5_accounts(
         account_list = []
 
         for acc, metrics in zip(account_data, results):
-            metrics = metrics or {}
+            metrics = metrics if isinstance(metrics, dict) else {}
 
             account_list.append({
                 **acc,
@@ -273,6 +272,8 @@ async def undeploy_mt5_account(
             trading_account.state = "undeployed"
             trading_account.connection_status = "disconnected"
             db.commit()
+            # ✅ Evict the now-dead connection from the pool
+            await rpc_pool.invalidate(trading_account.metaapi_account_id)
 
             # ✅ SUCCESS LOG
             log(db=db,
