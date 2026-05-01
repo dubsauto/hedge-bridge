@@ -94,13 +94,11 @@ class ListenerManager:
                 self._recover_from_global_outage()
             )
 
+    # Fix 1: _recover_from_global_outage — correct the SQLAlchemy filter
     async def _recover_from_global_outage(self):
-        """Wait for MetaApi socket to stabilize, then reconnect all accounts cleanly."""
         print(f"⏸️ Pausing reconnects for {GLOBAL_OUTAGE_COOLDOWN}s while MetaApi socket recovers...")
-
         await asyncio.sleep(GLOBAL_OUTAGE_COOLDOWN)
 
-        # Drain the reconnect queue — stale entries from the outage
         while not self._reconnect_queue.empty():
             try:
                 self._reconnect_queue.get_nowait()
@@ -108,21 +106,21 @@ class ListenerManager:
             except Exception:
                 break
 
-        # Reset all reconnect attempt counters — this was a global outage, not per-account failure
         self._reconnect_attempts.clear()
         self._disconnect_times.clear()
         self._global_outage = False
 
         print("🌐 Global outage cooldown complete — queuing fresh reconnects for all accounts")
 
-        # Re-queue all known accounts for clean reconnect
         db: Session = SessionLocal()
         try:
-            accounts = db.query(TradingAccount).filter(
-                TradingAccount.state.upper() == "DEPLOYED"
-            ).all()
+            # ✅ Fix: filter in Python, not SQL
+            accounts = db.query(TradingAccount).all()
 
             for acc in accounts:
+                if not acc.state or acc.state.upper() != "DEPLOYED":
+                    continue
+
                 is_used = db.query(CopyRelationship).filter(
                     (CopyRelationship.master_account_id == acc.id) |
                     (CopyRelationship.slave_account_id == acc.id)
@@ -131,7 +129,6 @@ class ListenerManager:
                 if not is_used:
                     continue
 
-                # Only queue if not already connected
                 if get_connection(acc.metaapi_account_id) is None:
                     try:
                         self._reconnect_queue.put_nowait(acc.metaapi_account_id)
@@ -140,6 +137,138 @@ class ListenerManager:
                         pass
         finally:
             db.close()
+
+
+    # Fix 2: _background_sync_wait — trigger mark_disconnected when sync fails
+    # so dead connections don't block future attach attempts
+    async def _background_sync_wait(self, account_id: str, connection):
+        for attempt in range(1, 4):
+            try:
+                await asyncio.wait_for(
+                    connection.wait_synchronized(),
+                    timeout=SYNC_TIMEOUT
+                )
+                print(f"✅ Background sync complete → {account_id}")
+                self._set_listener_active(account_id, True)
+                self._reconnect_attempts.pop(account_id, None)
+                self._disconnect_times.pop(account_id, None)
+                return
+
+            except asyncio.CancelledError:
+                print(f"🛑 Background sync cancelled → {account_id}")
+                return
+
+            except asyncio.TimeoutError:
+                print(f"⏳ Background sync timeout (attempt {attempt}/3) → {account_id}")
+
+            except Exception as e:
+                print(f"⚠️ Background sync error (attempt {attempt}/3) → {account_id}: {e}")
+                if "connection has been closed" in str(e).lower():
+                    print(f"🛑 Connection closed, stopping background sync → {account_id}")
+                    # ✅ Trigger reconnect so it doesn't sit dead
+                    await self.mark_disconnected(account_id)
+                    return
+
+            await asyncio.sleep(5)
+
+        # ✅ Fix: after 3 failed syncs, treat as dead — trigger reconnect
+        print(f"⚠️ Sync never completed after 3 attempts → {account_id}, triggering reconnect")
+        await self.mark_disconnected(account_id)
+
+
+    # Fix 3: _ensure_listener — recreate the MetaApi client if it appears stale
+    # The SDK carries zombie state across deploys on Render
+    async def _ensure_listener(self, acc: TradingAccount):
+        account_id = acc.metaapi_account_id
+
+        async with self._lock:
+            if get_connection(account_id) is not None:
+                return
+            if account_id in self._attaching:
+                print(f"⏸️ Already attaching → {account_id}, skipping")
+                return
+            self._attaching.add(account_id)
+
+        connection = None
+
+        try:
+            print(f"🔌 Attaching listener → {account_id}")
+
+            # ✅ Fix: always get a fresh api reference — avoids stale SDK state
+            api = get_metaapi_client()
+            self._api = api
+
+            account = await api.metatrader_account_api.get_account(account_id)
+
+            if account.state.upper() != "DEPLOYED":
+                print(f"🚀 Deploying → {account_id}")
+                await account.deploy()
+                await asyncio.sleep(DEPLOY_WAIT)
+
+            print(f"⏳ Waiting for broker connection → {account_id}")
+            timeout = 60
+            connected = False
+
+            for i in range(timeout):
+                try:
+                    await account.reload()
+                except Exception:
+                    pass
+
+                status = account.connection_status
+                print(f"   [{i+1}/{timeout}] connection_status={status}")
+
+                if status == "CONNECTED":
+                    connected = True
+                    break
+
+                await asyncio.sleep(1)
+
+            if not connected:
+                print(f"❌ Broker not connected after {timeout}s → {account_id}")
+                return
+
+            await asyncio.sleep(2)
+
+            connection = account.get_streaming_connection()
+            print(f"🔗 Connecting stream → {account_id}")
+            await connection.connect()
+
+            async with self._lock:
+                if get_connection(account_id) is not None:
+                    print(f"⚠️ Concurrent attach beat us → {account_id}, closing duplicate")
+                    try:
+                        await connection.close()
+                    except Exception:
+                        pass
+                    return
+
+                listener = MetaApiTradeListener(acc.id, manager=self)
+                connection.add_synchronization_listener(listener)
+                set_connection(account_id, connection)
+                self._listeners[account_id] = listener
+                self._connected_at[account_id] = time.monotonic()
+
+            print(f"👂 Listener attached → {account_id}")
+            self._set_listener_active(account_id, False)
+
+            task = asyncio.create_task(
+                self._background_sync_wait(account_id, connection)
+            )
+            async with self._lock:
+                self._sync_tasks[account_id] = task
+
+        except Exception as e:
+            print(f"❌ Attach failed {acc.id}: {e}")
+            if connection:
+                try:
+                    await connection.close()
+                except Exception:
+                    pass
+
+        finally:
+            async with self._lock:
+                self._attaching.discard(account_id)
 
     # =====================================
     # KEEPALIVE
@@ -379,131 +508,6 @@ class ListenerManager:
 
             except Exception:
                 pass
-
-    # =====================================
-    # ENSURE LISTENER EXISTS
-    # =====================================
-    async def _ensure_listener(self, acc: TradingAccount):
-        account_id = acc.metaapi_account_id
-
-        async with self._lock:
-            if get_connection(account_id) is not None:
-                return
-            if account_id in self._attaching:
-                print(f"⏸️ Already attaching → {account_id}, skipping")
-                return
-            self._attaching.add(account_id)
-
-        connection = None
-
-        try:
-            print(f"🔌 Attaching listener → {account_id}")
-
-            api = await self._get_api()
-            account = await api.metatrader_account_api.get_account(account_id)
-
-            if account.state.upper() != "DEPLOYED":
-                print(f"🚀 Deploying → {account_id}")
-                await account.deploy()
-                await asyncio.sleep(DEPLOY_WAIT)
-
-            print(f"⏳ Waiting for broker connection → {account_id}")
-            timeout = 60
-            connected = False
-
-            for i in range(timeout):
-                try:
-                    await account.reload()
-                except Exception:
-                    pass
-
-                status = account.connection_status
-                print(f"   [{i+1}/{timeout}] connection_status={status}")
-
-                if status == "CONNECTED":
-                    connected = True
-                    break
-
-                await asyncio.sleep(1)
-
-            if not connected:
-                print(f"❌ Broker not connected after {timeout}s → {account_id}")
-                return
-
-            await asyncio.sleep(2)
-
-            connection = account.get_streaming_connection()
-            print(f"🔗 Connecting stream → {account_id}")
-            await connection.connect()
-
-            async with self._lock:
-                if get_connection(account_id) is not None:
-                    print(f"⚠️ Concurrent attach beat us → {account_id}, closing duplicate")
-                    try:
-                        await connection.close()
-                    except Exception:
-                        pass
-                    return
-
-                listener = MetaApiTradeListener(acc.id, manager=self)
-                connection.add_synchronization_listener(listener)
-                set_connection(account_id, connection)
-                self._listeners[account_id] = listener
-                self._connected_at[account_id] = time.monotonic()
-
-            print(f"👂 Listener attached → {account_id}")
-            self._set_listener_active(account_id, False)
-
-            task = asyncio.create_task(
-                self._background_sync_wait(account_id, connection)
-            )
-            async with self._lock:
-                self._sync_tasks[account_id] = task
-
-        except Exception as e:
-            print(f"❌ Attach failed {acc.id}: {e}")
-            if connection:
-                try:
-                    await connection.close()
-                except Exception:
-                    pass
-
-        finally:
-            async with self._lock:
-                self._attaching.discard(account_id)
-
-    # =====================================
-    # BACKGROUND SYNC WAIT
-    # =====================================
-    async def _background_sync_wait(self, account_id: str, connection):
-        for attempt in range(1, 4):
-            try:
-                await asyncio.wait_for(
-                    connection.wait_synchronized(),
-                    timeout=SYNC_TIMEOUT
-                )
-                print(f"✅ Background sync complete → {account_id}")
-                self._set_listener_active(account_id, True)
-                self._reconnect_attempts.pop(account_id, None)
-                self._disconnect_times.pop(account_id, None)
-                return
-
-            except asyncio.CancelledError:
-                print(f"🛑 Background sync cancelled → {account_id}")
-                return
-
-            except asyncio.TimeoutError:
-                print(f"⏳ Background sync timeout (attempt {attempt}/3) → {account_id}")
-
-            except Exception as e:
-                print(f"⚠️ Background sync error (attempt {attempt}/3) → {account_id}: {e}")
-                if "connection has been closed" in str(e).lower():
-                    print(f"🛑 Connection closed, stopping background sync → {account_id}")
-                    return
-
-            await asyncio.sleep(5)
-
-        print(f"⚠️ Sync never completed after 3 attempts → {account_id}")
 
     # =====================================
     # CANCEL SYNC TASK
