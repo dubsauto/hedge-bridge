@@ -1202,11 +1202,26 @@ function updateLiveOverview(selectedId) {
     document.getElementById("connDot").className = "ui-dot offline";
     return;
   }
-  const isConnected = account.online || account.state === "deployed";
-  document.getElementById("connStatus").textContent = isConnected ? "Connected" : "Offline";
+
+  const isDeployed = account.state === "deployed" || account.online === true;
+  const listenerActive = account.listener_active === true;
+
+  let dotClass, statusText;
+  if (isDeployed && listenerActive) {
+    dotClass = "online";
+    statusText = "Connected";
+  } else if (isDeployed && !listenerActive) {
+    dotClass = "syncing";
+    statusText = "Syncing...";
+  } else {
+    dotClass = "offline";
+    statusText = "Offline";
+  }
+
+  document.getElementById("connStatus").textContent = statusText;
   document.getElementById("acctLogin").textContent = account.login;
   document.getElementById("acctServer").textContent = account.server;
-  document.getElementById("connDot").className = `ui-dot ${isConnected ? 'online' : 'offline'}`;
+  document.getElementById("connDot").className = `ui-dot ${dotClass}`;
 }
 
 async function updateRealTimeTrades(accountId) {
