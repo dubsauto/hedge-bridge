@@ -12,7 +12,7 @@ from app.api.admin_routes import router as admin_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.api.cycle_calculator_routes import router as cycle_calculator_router
 from app.api.vps_routes import router as vps_router 
-from hedgebridge import rpc_pool
+from hedgebridge.rpc_pool import rpc_pool
 from hedgebridge.listener_manager import listener_manager
 
 load_dotenv()
