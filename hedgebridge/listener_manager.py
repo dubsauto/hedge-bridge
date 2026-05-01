@@ -532,6 +532,12 @@ class ListenerManager:
     # =====================================
     async def _remove_listener(self, acc: TradingAccount):
         account_id = acc.metaapi_account_id
+        account = await self._api.metatrader_account_api.get_account(account_id)
+
+        if account.state.upper() != "UNDEPLOYED":
+            print(f"🚀 Undeploying before remove → {account_id}")
+            await account.undeploy()
+            await asyncio.sleep(7)
 
         async with self._lock:
             connection = get_connection(account_id)
