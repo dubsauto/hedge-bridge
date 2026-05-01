@@ -1235,10 +1235,11 @@ async def get_positions(
             connection.get_positions(),
             timeout=30
         )
-
+        print(f"✅ Retrieved {len(positions)} positions for account {account_id}")
         return {"success": True, "positions": positions}
 
     except asyncio.TimeoutError:
+        print(f"⏰ Timeout while fetching positions for account {account_id}")
         return {
             "success": False,
             "positions": [],
@@ -1246,6 +1247,7 @@ async def get_positions(
         }
 
     except asyncio.CancelledError:
+        print(f"❌ Fetching positions cancelled for account {account_id}")
         return {
             "success": False,
             "positions": [],
@@ -1253,6 +1255,7 @@ async def get_positions(
         }
     
     except Exception as e:
+        print(f"❌ Error fetching positions for account {account_id}: {e}")
         return {
             "success": False,
             "positions": [],
