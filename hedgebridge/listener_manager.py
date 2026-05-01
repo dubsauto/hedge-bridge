@@ -14,6 +14,9 @@ GRACE_PERIOD = 60
 KEEPALIVE_INTERVAL = 45
 SYNC_TIMEOUT = 180
 DEPLOY_WAIT = 8
+GLOBAL_OUTAGE_THRESHOLD = 0.6   # if >60% of accounts drop within this window → global outage
+GLOBAL_OUTAGE_WINDOW = 10.0     # seconds window to detect simultaneous drops
+GLOBAL_OUTAGE_COOLDOWN = 45     # seconds to wait before reconnecting after global outage
 
 
 class ListenerManager:
@@ -28,6 +31,11 @@ class ListenerManager:
         self._reconnect_queue = asyncio.Queue()
         self._reconnect_attempts = {}
         self._reconnect_limit = 5
+
+        # Global outage detection
+        self._disconnect_times = {}       # account_id → timestamp of disconnect
+        self._global_outage = False       # flag: are we in a global outage?
+        self._outage_recovery_task = None
 
     # =====================================
     # GET METAAPI SINGLETON
@@ -59,6 +67,81 @@ class ListenerManager:
             db.close()
 
     # =====================================
+    # GLOBAL OUTAGE DETECTION
+    # =====================================
+    def _record_disconnect(self, account_id: str):
+        """Record a disconnect timestamp and check if it looks like a global outage."""
+        now = time.monotonic()
+        self._disconnect_times[account_id] = now
+
+        # Count how many accounts disconnected within the outage window
+        recent = [
+            t for t in self._disconnect_times.values()
+            if now - t <= GLOBAL_OUTAGE_WINDOW
+        ]
+
+        total_known = max(len(get_all_connections()) + len(recent), 1)
+        ratio = len(recent) / total_known
+
+        if ratio >= GLOBAL_OUTAGE_THRESHOLD and not self._global_outage:
+            print(f"🌐 Global outage detected — {len(recent)}/{total_known} accounts dropped simultaneously")
+            self._global_outage = True
+
+            if self._outage_recovery_task and not self._outage_recovery_task.done():
+                self._outage_recovery_task.cancel()
+
+            self._outage_recovery_task = asyncio.create_task(
+                self._recover_from_global_outage()
+            )
+
+    async def _recover_from_global_outage(self):
+        """Wait for MetaApi socket to stabilize, then reconnect all accounts cleanly."""
+        print(f"⏸️ Pausing reconnects for {GLOBAL_OUTAGE_COOLDOWN}s while MetaApi socket recovers...")
+
+        await asyncio.sleep(GLOBAL_OUTAGE_COOLDOWN)
+
+        # Drain the reconnect queue — stale entries from the outage
+        while not self._reconnect_queue.empty():
+            try:
+                self._reconnect_queue.get_nowait()
+                self._reconnect_queue.task_done()
+            except Exception:
+                break
+
+        # Reset all reconnect attempt counters — this was a global outage, not per-account failure
+        self._reconnect_attempts.clear()
+        self._disconnect_times.clear()
+        self._global_outage = False
+
+        print("🌐 Global outage cooldown complete — queuing fresh reconnects for all accounts")
+
+        # Re-queue all known accounts for clean reconnect
+        db: Session = SessionLocal()
+        try:
+            accounts = db.query(TradingAccount).filter(
+                TradingAccount.state == "DEPLOYED"
+            ).all()
+
+            for acc in accounts:
+                is_used = db.query(CopyRelationship).filter(
+                    (CopyRelationship.master_account_id == acc.id) |
+                    (CopyRelationship.slave_account_id == acc.id)
+                ).first()
+
+                if not is_used:
+                    continue
+
+                # Only queue if not already connected
+                if get_connection(acc.metaapi_account_id) is None:
+                    try:
+                        self._reconnect_queue.put_nowait(acc.metaapi_account_id)
+                        print(f"📋 Queued for reconnect → {acc.metaapi_account_id}")
+                    except Exception:
+                        pass
+        finally:
+            db.close()
+
+    # =====================================
     # KEEPALIVE
     # =====================================
     async def _keep_connections_alive(self):
@@ -76,7 +159,6 @@ class ListenerManager:
                             print(f"🕐 Grace period active → {account_id}, skipping health check")
                             continue
 
-                        # Don't kill while sync is still running
                         sync_task = self._sync_tasks.get(account_id)
                         if sync_task and not sync_task.done():
                             print(f"⏳ Sync in progress → {account_id}, skipping keepalive kill")
@@ -126,6 +208,17 @@ class ListenerManager:
             try:
                 account_id = await self._reconnect_queue.get()
 
+                # If global outage is active, requeue and wait
+                if self._global_outage:
+                    print(f"⏸️ Global outage active — requeueing {account_id}")
+                    await asyncio.sleep(5)
+                    try:
+                        self._reconnect_queue.put_nowait(account_id)
+                    except Exception:
+                        pass
+                    self._reconnect_queue.task_done()
+                    continue
+
                 attempts = self._reconnect_attempts.get(account_id, 0) + 1
                 self._reconnect_attempts[account_id] = attempts
 
@@ -138,10 +231,16 @@ class ListenerManager:
                     self._reconnect_queue.task_done()
                     continue
 
-                # Backoff scales with attempts: 5s, 10s, 15s, 20s, capped at 60s
                 backoff = min(5 * attempts, 60)
                 print(f"⏳ Backoff {backoff}s before reconnect → {account_id}")
                 await asyncio.sleep(backoff)
+
+                # Check again after backoff — outage may have been detected during sleep
+                if self._global_outage:
+                    print(f"⏸️ Global outage detected during backoff — requeueing {account_id}")
+                    self._reconnect_attempts.pop(account_id, None)
+                    self._reconnect_queue.task_done()
+                    continue
 
                 db: Session = SessionLocal()
                 try:
@@ -168,7 +267,6 @@ class ListenerManager:
     async def _nuclear_reset(self, account_id: str):
         print(f"☢️ Nuclear reset starting → {account_id}")
 
-        # Step 1: Full teardown
         async with self._lock:
             connection = get_connection(account_id)
             listener = self._listeners.pop(account_id, None)
@@ -203,10 +301,8 @@ class ListenerManager:
         self._set_listener_active(account_id, False)
         print(f"🧹 Nuclear teardown complete → {account_id}")
 
-        # Step 2: Wait before cold restart
         await asyncio.sleep(15)
 
-        # Step 3: Undeploy → redeploy to force fresh socket on MetaApi side
         try:
             api = await self._get_api()
             account = await api.metatrader_account_api.get_account(account_id)
@@ -225,7 +321,6 @@ class ListenerManager:
         except Exception as e:
             print(f"⚠️ Nuclear redeploy failed → {account_id}: {e}")
 
-        # Step 4: Queue fresh reconnect with clean counter
         print(f"🔁 Queuing fresh reconnect after nuclear reset → {account_id}")
         try:
             self._reconnect_queue.put_nowait(account_id)
@@ -236,6 +331,10 @@ class ListenerManager:
     # DB SYNC + HEALTH CHECK
     # =====================================
     async def _sync(self):
+        # Don't run sync during global outage — let recovery handle it
+        if self._global_outage:
+            return
+
         db: Session = SessionLocal()
 
         try:
@@ -260,7 +359,6 @@ class ListenerManager:
         finally:
             db.close()
 
-        # Health check — respects grace period and active sync tasks
         now = time.monotonic()
         for account_id, connection in list(get_all_connections().items()):
             try:
@@ -386,8 +484,8 @@ class ListenerManager:
                 )
                 print(f"✅ Background sync complete → {account_id}")
                 self._set_listener_active(account_id, True)
-                # Reset reconnect counter on successful sync
                 self._reconnect_attempts.pop(account_id, None)
+                self._disconnect_times.pop(account_id, None)
                 return
 
             except asyncio.CancelledError:
@@ -408,7 +506,7 @@ class ListenerManager:
         print(f"⚠️ Sync never completed after 3 attempts → {account_id}")
 
     # =====================================
-    # CANCEL BACKGROUND SYNC TASK
+    # CANCEL SYNC TASK
     # =====================================
     def _cancel_sync_task(self, account_id: str):
         task = self._sync_tasks.pop(account_id, None)
@@ -416,7 +514,7 @@ class ListenerManager:
             task.cancel()
 
     # =====================================
-    # REMOVE LISTENER (clean removal)
+    # REMOVE LISTENER
     # =====================================
     async def _remove_listener(self, acc: TradingAccount):
         account_id = acc.metaapi_account_id
@@ -461,8 +559,10 @@ class ListenerManager:
     # MARK DISCONNECTED
     # =====================================
     async def mark_disconnected(self, account_id: str):
+        # Record for outage detection BEFORE acquiring lock
+        self._record_disconnect(account_id)
+
         async with self._lock:
-            # Prevent double-processing if already cleaned up
             if account_id not in self._listeners and get_connection(account_id) is None:
                 return
 
@@ -497,11 +597,12 @@ class ListenerManager:
         self._set_listener_active(account_id, False)
         print(f"♻️ Marked for reconnection → {account_id}")
 
-        # Queue reconnect — worker handles backoff and nuclear reset
-        try:
-            self._reconnect_queue.put_nowait(account_id)
-        except asyncio.QueueFull:
-            pass
+        # Only queue if not in global outage — outage recovery will handle queuing
+        if not self._global_outage:
+            try:
+                self._reconnect_queue.put_nowait(account_id)
+            except asyncio.QueueFull:
+                pass
 
 
 # =====================================
