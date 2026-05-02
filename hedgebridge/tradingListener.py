@@ -1,4 +1,4 @@
-#hedgebridge/trading.py
+#hedgebridge/tradingListener.py
 from hedgebridge.api_client import get_metaapi_client
 from typing import Optional, Dict, Any
 from metaapi_cloud_sdk import MetaApi
