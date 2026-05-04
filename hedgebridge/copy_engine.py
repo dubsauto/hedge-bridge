@@ -1,7 +1,7 @@
 # hedgebridge/copy_engine.py
 
 from sqlalchemy.orm import Session
-from app.model import CopyRelationship, CopyTradeLink, TradingAccount, CopyTradeSettings, AccountLot
+from app.model import CopyRelationship, CopyTradeLink, SymbolMappingEntry, SymbolMappingGroup, TradingAccount, CopyTradeSettings, AccountLot
 from hedgebridge.tradingListener import trader_listener
 from app.database import SessionLocal
 from app.services.logger import log
@@ -153,6 +153,11 @@ class CopyEngine:
             execution_tasks = []
             task_meta = []
 
+            # =========================
+            # INSERT THIS INSIDE:
+            # for rel in relationships:
+            # =========================
+
             for rel in relationships:
                 slave_id = rel.slave_account_id
                 slave_acc = slave_accounts.get(slave_id)
@@ -164,6 +169,55 @@ class CopyEngine:
                     continue
 
                 print(f"\n[SLAVE] Preparing slave_id={slave_id}")
+
+                # -------------------------
+                # SYMBOL MAPPING
+                # -------------------------
+                master_symbol = symbol
+                final_symbol = master_symbol
+
+                try:
+                    # reopen short DB session only for symbol mapping lookup
+                    mapping_db = SessionLocal()
+
+                    try:
+                        mapping_entry = (
+                            mapping_db.query(SymbolMappingEntry)
+                            .join(
+                                SymbolMappingGroup,
+                                SymbolMappingEntry.group_id == SymbolMappingGroup.id
+                            )
+                            .filter(
+                                SymbolMappingGroup.owner_user_id == user_id,
+                                SymbolMappingEntry.account_id == slave_id
+                            )
+                            .first()
+                        )
+
+                        if mapping_entry:
+                            final_symbol = mapping_entry.symbol
+
+                            print(
+                                f"[SYMBOL MAP] slave_id={slave_id} | "
+                                f"master_symbol={master_symbol} "
+                                f"-> slave_symbol={final_symbol}"
+                            )
+                        else:
+                            print(
+                                f"[SYMBOL MAP] slave_id={slave_id} | "
+                                f"No mapping found, using original symbol={master_symbol}"
+                            )
+
+                    finally:
+                        mapping_db.close()
+
+                except Exception as e:
+                    print(
+                        f"[SYMBOL MAP ERROR] slave_id={slave_id} | "
+                        f"Failed mapping lookup: {str(e)} | "
+                        f"fallback={master_symbol}"
+                    )
+                    final_symbol = master_symbol
 
                 # -------------------------
                 # LOT SIZE
@@ -202,7 +256,10 @@ class CopyEngine:
                 if master_entry and rel.copy_direction == "opposite":
                     final_sl, final_tp = master_tp, master_sl
 
-                print(f"[SLTP BEFORE OFFSET] final_sl={final_sl}, final_tp={final_tp}")
+                print(
+                    f"[SLTP BEFORE OFFSET] final_sl={final_sl}, "
+                    f"final_tp={final_tp}"
+                )
 
                 # -------------------------
                 # PIPS OFFSET
@@ -216,7 +273,7 @@ class CopyEngine:
                         offset_value = await asyncio.wait_for(
                             self.pips_to_price(
                                 slave_acc.metaapi_account_id,
-                                symbol,
+                                final_symbol,   # <-- use mapped symbol
                                 pips_offset
                             ),
                             timeout=5
@@ -249,14 +306,15 @@ class CopyEngine:
                 # BUILD EXECUTION TASK
                 # -------------------------
                 print(
-                    f"[TASK] Building {final_type} task for slave={slave_id}"
+                    f"[TASK] Building {final_type} task for "
+                    f"slave={slave_id}, symbol={final_symbol}"
                 )
 
                 if final_type == "POSITION_TYPE_BUY":
                     task = asyncio.wait_for(
                         trader_listener.buy(
                             slave_acc.metaapi_account_id,
-                            symbol,
+                            final_symbol,   # <-- use mapped symbol
                             final_volume,
                             final_sl,
                             final_tp,
@@ -269,7 +327,7 @@ class CopyEngine:
                     task = asyncio.wait_for(
                         trader_listener.sell(
                             slave_acc.metaapi_account_id,
-                            symbol,
+                            final_symbol,   # <-- use mapped symbol
                             final_volume,
                             final_sl,
                             final_tp,
@@ -285,9 +343,11 @@ class CopyEngine:
                     "slave_id": slave_id,
                     "slave_acc": slave_acc,
                     "final_type": final_type,
-                    "final_volume": final_volume
+                    "final_volume": final_volume,
+                    "final_symbol": final_symbol
                 })
-
+                        
+            
             print(f"\n[STEP 3] Executing {len(execution_tasks)} tasks in parallel...")
 
             # =========================
@@ -311,6 +371,7 @@ class CopyEngine:
                 slave_acc = meta["slave_acc"]
                 final_type = meta["final_type"]
                 final_volume = meta["final_volume"]
+                symbol = meta["final_symbol"]
 
                 print(f"\n[RESULT] slave_id={slave_id}")
 
