@@ -9,6 +9,7 @@ from hedgebridge.listener import MetaApiTradeListener
 from hedgebridge.api_client import get_metaapi_client
 from hedgebridge.connection_store import set_connection, get_connection, remove_connection, get_all_connections
 import time
+from sqlalchemy import func
 
 
 GRACE_PERIOD = 60
