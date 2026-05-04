@@ -7,6 +7,7 @@ from app.database import SessionLocal
 from app.services.logger import log
 from datetime import datetime
 import asyncio
+from sqlalchemy import func
 
 
 class CopyEngine:
@@ -100,7 +101,9 @@ class CopyEngine:
                 for acc in db.query(TradingAccount).filter(
                     TradingAccount.id.in_(
                         [r.slave_account_id for r in relationships]
-                    )
+                    ),
+                    func.lower(TradingAccount.state) == "deployed",
+                    TradingAccount.listener_active == True  # ← fully synced and ready
                 ).all()
             }
 
@@ -367,7 +370,9 @@ class CopyEngine:
                 for acc in db.query(TradingAccount).filter(
                     TradingAccount.id.in_(
                         [l.slave_account_id for l in group_links if l.slave_account_id]
-                    )
+                    ),
+                    func.lower(TradingAccount.state) == "deployed",
+                    TradingAccount.listener_active == True
                 ).all()
             }
 
