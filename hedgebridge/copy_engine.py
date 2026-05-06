@@ -1,7 +1,7 @@
 # hedgebridge/copy_engine.py
 
 from sqlalchemy.orm import Session
-from app.model import CopyRelationship, CopyTradeLink, TradingAccount, CopyTradeSettings, AccountLot
+from app.model import CopyRelationship, CopyTradeLink, SymbolMappingEntry, SymbolMappingGroup, TradingAccount, CopyTradeSettings, AccountLot
 from hedgebridge.tradingListener import trader_listener
 from app.database import SessionLocal
 from app.services.logger import log
@@ -46,6 +46,10 @@ class CopyEngine:
         key = None
 
         try:
+            print(f"\n========== NEW TRADE DETECTED ==========")
+            print(f"[START] master_account_id={master_account_id}")
+            print(f"[POSITION] raw_position={position}")
+
             master_ticket = str(position.get("id") or position.get("ticket"))
             symbol = position.get("symbol")
             volume = position.get("volume")
@@ -55,22 +59,38 @@ class CopyEngine:
             master_tp = position.get("takeProfit")
             master_entry = position.get("price") or position.get("openPrice")
 
+            print(
+                f"[MASTER TRADE] ticket={master_ticket}, symbol={symbol}, "
+                f"volume={volume}, type={trade_type}, "
+                f"SL={master_sl}, TP={master_tp}, entry={master_entry}"
+            )
+
             key = f"open:{master_ticket}"
 
             if key in self._processing:
+                print(f"[SKIP] Already processing trade {master_ticket}")
                 return
 
             self._processing.add(key)
+            print(f"[LOCK] Added processing key={key}")
 
             # =========================
             # STEP 1: DB READ ONLY
             # =========================
+            print("[STEP 1] Loading DB data...")
+
             master_acc = db.query(TradingAccount).filter(
                 TradingAccount.id == master_account_id
             ).first()
 
             if not master_acc:
+                print(f"[ERROR] Master account not found: {master_account_id}")
                 return
+
+            print(
+                f"[MASTER ACCOUNT] id={master_acc.id}, "
+                f"metaapi_account_id={master_acc.metaapi_account_id}"
+            )
 
             user_id = master_acc.owner_user_id
 
@@ -82,10 +102,19 @@ class CopyEngine:
             pips_offset_enabled = settings.pips_offset_enabled if settings else False
             pips_offset = settings.pips_offset if settings else 0
 
+            print(
+                f"[SETTINGS] fixed_lot_enabled={fixed_lot_enabled}, "
+                f"pips_offset_enabled={pips_offset_enabled}, "
+                f"pips_offset={pips_offset}"
+            )
+
             account_lots_map = {
                 row.account_id: row.lot_size
                 for row in db.query(AccountLot).all()
             } if fixed_lot_enabled else {}
+
+            if fixed_lot_enabled:
+                print(f"[LOT MAP] {account_lots_map}")
 
             relationships = db.query(CopyRelationship).filter(
                 CopyRelationship.master_account_id == master_account_id,
@@ -93,7 +122,10 @@ class CopyEngine:
                 CopyRelationship.is_active == True
             ).all()
 
+            print(f"[RELATIONSHIPS] Found {len(relationships)} active relationships")
+
             if not relationships:
+                print("[SKIP] No active slave relationships found")
                 return
 
             slave_accounts = {
@@ -102,25 +134,90 @@ class CopyEngine:
                     TradingAccount.id.in_(
                         [r.slave_account_id for r in relationships]
                     ),
-                    func.lower(TradingAccount.state) == "deployed"  # ← case-insensitive
+                    func.lower(TradingAccount.state) == "deployed",
+                    TradingAccount.listener_active == True
                 ).all()
             }
 
+            print(f"[SLAVES READY] Found {len(slave_accounts)} deployed + active slaves")
+
             # close read session early
             db.close()
+            print("[DB] Read session closed")
 
             # =========================
             # STEP 2: PREPARE TASKS
             # =========================
+            print("[STEP 2] Preparing execution tasks...")
+
             execution_tasks = []
             task_meta = []
+
+            # =========================
+            # INSERT THIS INSIDE:
+            # for rel in relationships:
+            # =========================
 
             for rel in relationships:
                 slave_id = rel.slave_account_id
                 slave_acc = slave_accounts.get(slave_id)
 
                 if not slave_acc:
+                    print(
+                        f"[SKIP] Slave {slave_id} not deployed or listener not active"
+                    )
                     continue
+
+                print(f"\n[SLAVE] Preparing slave_id={slave_id}")
+
+                # -------------------------
+                # SYMBOL MAPPING
+                # -------------------------
+                master_symbol = symbol
+                final_symbol = master_symbol
+
+                try:
+                    # reopen short DB session only for symbol mapping lookup
+                    mapping_db = SessionLocal()
+
+                    try:
+                        mapping_entry = (
+                            mapping_db.query(SymbolMappingEntry)
+                            .join(
+                                SymbolMappingGroup,
+                                SymbolMappingEntry.group_id == SymbolMappingGroup.id
+                            )
+                            .filter(
+                                SymbolMappingGroup.owner_user_id == user_id,
+                                SymbolMappingEntry.account_id == slave_id
+                            )
+                            .first()
+                        )
+
+                        if mapping_entry:
+                            final_symbol = mapping_entry.symbol
+
+                            print(
+                                f"[SYMBOL MAP] slave_id={slave_id} | "
+                                f"master_symbol={master_symbol} "
+                                f"-> slave_symbol={final_symbol}"
+                            )
+                        else:
+                            print(
+                                f"[SYMBOL MAP] slave_id={slave_id} | "
+                                f"No mapping found, using original symbol={master_symbol}"
+                            )
+
+                    finally:
+                        mapping_db.close()
+
+                except Exception as e:
+                    print(
+                        f"[SYMBOL MAP ERROR] slave_id={slave_id} | "
+                        f"Failed mapping lookup: {str(e)} | "
+                        f"fallback={master_symbol}"
+                    )
+                    final_symbol = master_symbol
 
                 # -------------------------
                 # LOT SIZE
@@ -130,6 +227,8 @@ class CopyEngine:
                     if fixed_lot_enabled
                     else volume
                 )
+
+                print(f"[LOT] final_volume={final_volume}")
 
                 # -------------------------
                 # DIRECTION
@@ -143,6 +242,11 @@ class CopyEngine:
                         else "POSITION_TYPE_BUY"
                     )
 
+                print(
+                    f"[DIRECTION] copy_direction={rel.copy_direction}, "
+                    f"final_type={final_type}"
+                )
+
                 # -------------------------
                 # SL / TP
                 # -------------------------
@@ -152,19 +256,30 @@ class CopyEngine:
                 if master_entry and rel.copy_direction == "opposite":
                     final_sl, final_tp = master_tp, master_sl
 
+                print(
+                    f"[SLTP BEFORE OFFSET] final_sl={final_sl}, "
+                    f"final_tp={final_tp}"
+                )
+
                 # -------------------------
                 # PIPS OFFSET
                 # -------------------------
                 if pips_offset_enabled and pips_offset > 0:
                     try:
+                        print(
+                            f"[PIPS OFFSET] Calculating offset for slave={slave_id}"
+                        )
+
                         offset_value = await asyncio.wait_for(
                             self.pips_to_price(
                                 slave_acc.metaapi_account_id,
-                                symbol,
+                                final_symbol,   # <-- use mapped symbol
                                 pips_offset
                             ),
                             timeout=5
                         )
+
+                        print(f"[PIPS OFFSET] offset_value={offset_value}")
 
                         if final_type == "POSITION_TYPE_BUY":
                             if final_sl:
@@ -177,17 +292,29 @@ class CopyEngine:
                             if final_tp:
                                 final_tp -= offset_value
 
-                    except Exception:
-                        pass
+                        print(
+                            f"[SLTP AFTER OFFSET] final_sl={final_sl}, "
+                            f"final_tp={final_tp}"
+                        )
+
+                    except Exception as e:
+                        print(
+                            f"[WARNING] Pips offset failed for slave={slave_id}: {str(e)}"
+                        )
 
                 # -------------------------
                 # BUILD EXECUTION TASK
                 # -------------------------
+                print(
+                    f"[TASK] Building {final_type} task for "
+                    f"slave={slave_id}, symbol={final_symbol}"
+                )
+
                 if final_type == "POSITION_TYPE_BUY":
                     task = asyncio.wait_for(
                         trader_listener.buy(
                             slave_acc.metaapi_account_id,
-                            symbol,
+                            final_symbol,   # <-- use mapped symbol
                             final_volume,
                             final_sl,
                             final_tp,
@@ -200,7 +327,7 @@ class CopyEngine:
                     task = asyncio.wait_for(
                         trader_listener.sell(
                             slave_acc.metaapi_account_id,
-                            symbol,
+                            final_symbol,   # <-- use mapped symbol
                             final_volume,
                             final_sl,
                             final_tp,
@@ -216,8 +343,12 @@ class CopyEngine:
                     "slave_id": slave_id,
                     "slave_acc": slave_acc,
                     "final_type": final_type,
-                    "final_volume": final_volume
+                    "final_volume": final_volume,
+                    "final_symbol": final_symbol
                 })
+                        
+            
+            print(f"\n[STEP 3] Executing {len(execution_tasks)} tasks in parallel...")
 
             # =========================
             # STEP 3: EXECUTE ALL IN PARALLEL
@@ -233,25 +364,44 @@ class CopyEngine:
             # =========================
             # STEP 4: SAVE SUCCESSFUL RESULTS
             # =========================
+            print("[STEP 4] Processing execution results...")
+
             for meta, result in zip(task_meta, results):
                 slave_id = meta["slave_id"]
                 slave_acc = meta["slave_acc"]
                 final_type = meta["final_type"]
                 final_volume = meta["final_volume"]
+                symbol = meta["final_symbol"]
+
+                print(f"\n[RESULT] slave_id={slave_id}")
 
                 # task exception
                 if isinstance(result, Exception):
+                    print(
+                        f"[FAILURE] Task exception for slave={slave_id}: {str(result)}"
+                    )
                     failed = True
                     continue
 
+                print(f"[BROKER RESPONSE] {result}")
+
                 # broker returned failure
                 if not result.get("success"):
+                    print(
+                        f"[FAILURE] Broker returned unsuccessful response "
+                        f"for slave={slave_id}"
+                    )
                     failed = True
                     continue
 
                 try:
                     slave_ticket = str(
                         result["result"]["orderId"]
+                    )
+
+                    print(
+                        f"[SUCCESS] slave_id={slave_id}, "
+                        f"slave_ticket={slave_ticket}"
                     )
 
                     write_db = SessionLocal()
@@ -271,6 +421,11 @@ class CopyEngine:
                         write_db.add(link)
                         write_db.commit()
 
+                        print(
+                            f"[DB SAVE] Link saved for slave={slave_id}, "
+                            f"ticket={slave_ticket}"
+                        )
+
                         opened_links.append(
                             (slave_acc, slave_ticket)
                         )
@@ -278,20 +433,38 @@ class CopyEngine:
                     finally:
                         write_db.close()
 
-                except Exception:
+                except Exception as e:
+                    print(
+                        f"[FAILURE] Failed saving link for slave={slave_id}: {str(e)}"
+                    )
                     failed = True
 
             # =========================
             # STEP 5: SAFETY ROLLBACK
             # =========================
             if failed:
+                print("\n========== SAFETY ROLLBACK TRIGGERED ==========")
+                print(
+                    "[ROLLBACK REASON] At least one slave copy failed, "
+                    "closing master + all successful slave trades"
+                )
+
                 try:
+                    print(
+                        f"[ROLLBACK] Closing MASTER trade ticket={master_ticket}"
+                    )
+
                     await trader_listener.close_position(
                         master_acc.metaapi_account_id,
                         master_ticket
                     )
-                except Exception:
-                    pass
+
+                    print("[ROLLBACK] Master trade closed successfully")
+
+                except Exception as e:
+                    print(
+                        f"[ROLLBACK ERROR] Failed closing master trade: {str(e)}"
+                    )
 
                 rollback_tasks = [
                     trader_listener.close_position(
@@ -301,11 +474,26 @@ class CopyEngine:
                     for acc, ticket in opened_links
                 ]
 
+                print(
+                    f"[ROLLBACK] Closing {len(rollback_tasks)} successful slave trades"
+                )
+
                 if rollback_tasks:
-                    await asyncio.gather(
+                    rollback_results = await asyncio.gather(
                         *rollback_tasks,
                         return_exceptions=True
                     )
+
+                    for i, rollback_result in enumerate(rollback_results, 1):
+                        print(
+                            f"[ROLLBACK RESULT {i}] {rollback_result}"
+                        )
+
+                print("========== ROLLBACK COMPLETE ==========\n")
+            else:
+                print(
+                    "\n[SUCCESS] All slave trades copied successfully. No rollback needed.\n"
+                )
 
         finally:
             try:
@@ -315,6 +503,7 @@ class CopyEngine:
 
             if key:
                 self._processing.discard(key)
+                print(f"[UNLOCK] Removed processing key={key}")
 
 
     async def handle_close_trade(
@@ -369,7 +558,9 @@ class CopyEngine:
                 for acc in db.query(TradingAccount).filter(
                     TradingAccount.id.in_(
                         [l.slave_account_id for l in group_links if l.slave_account_id]
-                    )
+                    ),
+                    func.lower(TradingAccount.state) == "deployed",
+                    TradingAccount.listener_active == True
                 ).all()
             }
 
