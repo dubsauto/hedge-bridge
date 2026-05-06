@@ -32,6 +32,9 @@ class ListenerManager:
         self._reconnect_attempts = {}
         self._reconnect_limit = 5
 
+        # Guard against cascade SDK resets: only allow one reset per 60s globally
+        self._last_sdk_reset = 0.0
+
         # Global outage detection
         self._disconnect_times = {}
         self._global_outage = False
@@ -46,9 +49,16 @@ class ListenerManager:
         return self._api
 
     def _get_or_reset_api(self, account_id: str):
-        """Use fresh client on reconnect attempts to avoid zombie SDK state."""
-        if self._reconnect_attempts.get(account_id, 0) > 0:
+        """Only reset SDK after 3+ failures for this account AND 60s global cooldown.
+
+        Resetting the singleton on every reconnect disconnects all other accounts
+        (they share the same WebSocket client), causing a cascade death spiral.
+        """
+        attempts = self._reconnect_attempts.get(account_id, 0)
+        now = time.monotonic()
+        if attempts >= 3 and (now - self._last_sdk_reset) > 60:
             print(f"🔄 Resetting MetaApi client for reconnect → {account_id}")
+            self._last_sdk_reset = now
             self._api = reset_metaapi_client()
         else:
             self._api = get_metaapi_client()
@@ -419,7 +429,7 @@ class ListenerManager:
                 await asyncio.sleep(DEPLOY_WAIT)
 
             print(f"⏳ Waiting for broker connection → {account_id}")
-            timeout = 60
+            timeout = 15
             connected = False
 
             for i in range(timeout):
@@ -438,8 +448,7 @@ class ListenerManager:
                 await asyncio.sleep(1)
 
             if not connected:
-                print(f"❌ Broker not connected after {timeout}s → {account_id}")
-                return
+                print(f"⚠️ Broker not CONNECTED after {timeout}s → {account_id}, attempting stream anyway")
 
             await asyncio.sleep(2)
 
