@@ -21,17 +21,20 @@ class RpcConnectionPool:
 
         # Cooldown: after a hard reset, don't immediately retry
         self._cooldown_until: Dict[str, float] = {}
-        self._cooldown_seconds = 30
+        self._cooldown_seconds = 60            # longer cooldown after failure (was 30s)
 
         self._verify_ttl = 10
         self._max_failures = 3
-        self._watchdog_interval = 60
-        self._idle_evict_seconds = 30 * 60   # 30 minutes
+        self._watchdog_interval = 120          # probe every 2 min instead of 1
+        self._idle_evict_seconds = 5 * 60     # evict after 5 min idle (was 30)
         self._watchdog_task: Optional[asyncio.Task] = None
 
         self._hard_reset_times: list = []
         self._sdk_reset_window = 300
         self._sdk_reset_threshold = 5
+
+        # Limit simultaneous connection builds to avoid overloading 0.5 CPU
+        self._build_semaphore = asyncio.Semaphore(2)
 
     def _get_account_lock(self, account_id: str) -> asyncio.Lock:
         if account_id not in self._account_locks:
@@ -232,6 +235,10 @@ class RpcConnectionPool:
     # BUILD CONNECTION
     # =====================================
     async def _build_connection(self, account_id: str):
+        async with self._build_semaphore:
+            return await self._build_connection_inner(account_id)
+
+    async def _build_connection_inner(self, account_id: str):
         self._accounts.pop(account_id, None)
         account = await self.get_account(account_id)
 
@@ -240,11 +247,12 @@ class RpcConnectionPool:
             await account.deploy()
             await asyncio.sleep(5)
 
-        # Wait for MetaApi to report the account is broker-connected.
-        # Cap at 30s — some brokers report DISCONNECTED even when RPC works,
-        # so we fall through and let wait_synchronized() be the real gate.
+        # Wait up to 8s for broker-connected status.  Some brokers report
+        # DISCONNECTED even when RPC works, so we fall through and let
+        # wait_synchronized() be the real gate.  Keeping this short prevents
+        # stacked tasks from holding memory when MetaApi is unreachable.
         print(f"[RpcPool] Waiting for broker connection → {account_id}")
-        for i in range(30):
+        for i in range(8):
             try:
                 await account.reload()
             except Exception:
@@ -256,12 +264,12 @@ class RpcConnectionPool:
 
             print(
                 f"[RpcPool] Waiting broker connection "
-                f"[{i+1}/30] → {account_id} (status: {state})"
+                f"[{i+1}/8] → {account_id} (status: {state})"
             )
             await asyncio.sleep(1)
         else:
             print(
-                f"[RpcPool] Broker status not CONNECTED after 30s → {account_id}, "
+                f"[RpcPool] Broker status not CONNECTED after 8s → {account_id}, "
                 f"attempting RPC anyway"
             )
 

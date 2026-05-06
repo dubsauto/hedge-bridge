@@ -112,7 +112,7 @@ class MT5AccountManager:
             now = time.time()
 
             cached = self._metrics_cache.get(account_id)
-            if cached and now - cached["ts"] < 5:
+            if cached and now - cached["ts"] < 30:
                 return cached["data"]
 
             try:

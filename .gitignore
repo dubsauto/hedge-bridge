@@ -22,5 +22,6 @@ test.ipynb
 lines.txt
 .env
 .metaapi/
+.claude/
 images/
 docs/
