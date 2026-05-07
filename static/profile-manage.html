@@ -223,9 +223,16 @@ function renderUsersTable(users) {
       </td>
       <td>
         <label class="form-check form-switch">
-          <input type="checkbox" class="form-check-input can-calculator-toggle" data-user-id="${user.id}" 
+          <input type="checkbox" class="form-check-input can-calculator-toggle" data-user-id="${user.id}"
                  ${user.can_use_calculator ? 'checked' : ''}>
           <span class="form-check-label">Calculator</span>
+        </label>
+      </td>
+      <td>
+        <label class="form-check form-switch">
+          <input type="checkbox" class="form-check-input can-trading-hub-toggle" data-user-id="${user.id}"
+                 ${user.can_use_trading_hub !== false ? 'checked' : ''}>
+          <span class="form-check-label">Trading Hub</span>
         </label>
       </td>
       <td class="text-end">
@@ -238,7 +245,7 @@ function renderUsersTable(users) {
   });
 
   // Enable save button when something changes
-  document.querySelectorAll(".role-select, .can-trade-toggle, .can-calculator-toggle").forEach(input => {
+  document.querySelectorAll(".role-select, .can-trade-toggle, .can-calculator-toggle, .can-trading-hub-toggle").forEach(input => {
     input.addEventListener("change", () => {
       const userId = input.dataset.userId;
       const saveBtn = document.querySelector(`.save-btn[data-user-id="${userId}"]`);
@@ -286,6 +293,7 @@ function renderUsersTable(users) {
       const roleSelect = document.querySelector(`.role-select[data-user-id="${userId}"]`);
       const canTradeCheck = document.querySelector(`.can-trade-toggle[data-user-id="${userId}"]`);
       const canCalculatorCheck = document.querySelector(`.can-calculator-toggle[data-user-id="${userId}"]`);
+      const canTradingHubCheck = document.querySelector(`.can-trading-hub-toggle[data-user-id="${userId}"]`);
 
       try {
         const res = await fetch("/admin/update-user", {
@@ -299,6 +307,7 @@ function renderUsersTable(users) {
             role: roleSelect.value,
             can_trade: canTradeCheck.checked,
             can_use_calculator: canCalculatorCheck.checked,
+            can_use_trading_hub: canTradingHubCheck ? canTradingHubCheck.checked : true,
             password: password || null
           })
         });

@@ -291,6 +291,10 @@
         <span class="ui-ico ui-ico-badge">C</span> Cycle Calculator
       </a>
 
+      <a class="ui-nav-item" href="/trading-hub" id="tradingHubLink">
+        <span class="ui-ico ui-ico-badge">T</span> Trading Hub
+      </a>
+
       <a class="ui-nav-item ui-nav-item-book" href="/profile-manage" id="profileManageLink">
         <span class="ui-ico ui-ico-badge">P</span>
         <span class="ui-nav-text">Profile Manage - 🔰</span>
@@ -543,6 +547,7 @@ let logsInterval = null;
 let tradesInterval = null;
 let currentMappings = [];
 let canUseCalculator = false;
+let canUseTradingHub = false;
 
 // ========================
 // LIVE CARD POLLING
@@ -679,10 +684,12 @@ async function loadDashboard() {
     const userData = await res.json();
     const isAdmin = userData.role === "admin";
     canUseCalculator = userData.can_use_calculator || false;
+    canUseTradingHub = userData.can_use_trading_hub !== false;
 
     const profileManageLink = document.getElementById("profileManageLink");
     const profileActivityLink = document.getElementById("profileActivityLink");
     const liveCalculatorLink = document.getElementById("liveCalculatorLink");
+    const tradingHubLink = document.getElementById("tradingHubLink");
 
     if (!isAdmin) {
       if (profileManageLink) profileManageLink.style.display = "none";
@@ -690,6 +697,9 @@ async function loadDashboard() {
     }
     if (!canUseCalculator) {
       if (liveCalculatorLink) liveCalculatorLink.style.display = "none";
+    }
+    if (!canUseTradingHub) {
+      if (tradingHubLink) tradingHubLink.style.display = "none";
     }
 
     document.getElementById("rolePill").textContent = `Role: ${isAdmin ? 'Admin' : 'User'}`;

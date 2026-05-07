@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trading Account Manager</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #ffffff;
+    --bg-card: #f3f3f3;
+    --bg-card-inner: #ebebeb;
+    --border: #e0e0e0;
+    --border-focus: #3b82f6;
+    --text: #111111;
+    --text-secondary: #555555;
+    --text-muted: #888888;
+    --accent: #1d4ed8;
+    --accent-hover: #1e40af;
+    --accent-light: #dbeafe;
+    --green: #16a34a;
+    --green-light: #dcfce7;
+    --red: #dc2626;
+    --red-light: #fee2e2;
+    --yellow: #d97706;
+    --yellow-light: #fef3c7;
+    --big-color: #1d4ed8;
+    --big-bg: #eff6ff;
+    --small-color: #7c3aed;
+    --small-bg: #f5f3ff;
+    --sidebar-w: 230px;
+    --topbar-h: 58px;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow: 0 1px 4px rgba(0,0,0,0.08), 0 0 0 1px var(--border);
+    --shadow-hover: 0 4px 16px rgba(0,0,0,0.1);
+    --font: 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+
+  /* ── APP SHELL ── */
+  #app { display: flex; min-height: 100vh; }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    background: #fafafa;
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    position: fixed; top: 0; left: 0; bottom: 0;
+    z-index: 100;
+  }
+  .sidebar-header {
+    height: var(--topbar-h);
+    padding: 0 20px;
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sidebar-icon {
+    width: 32px; height: 32px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sidebar-icon svg { width: 16px; height: 16px; color: #fff; }
+  .sidebar-brand { font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: -.01em; }
+  .sidebar-brand span { color: var(--accent); }
+  .back-btn {
+    margin-left: auto; background: none; border: 1px solid var(--border);
+    color: var(--text-secondary); cursor: pointer; padding: 4px 9px;
+    border-radius: var(--radius-sm); font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; gap: 5px; transition: all .15s;
+    white-space: nowrap;
+  }
+  .back-btn:hover { background: var(--bg-card); color: var(--text); }
+  .sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+  .nav-section-label {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 0 10px; margin: 16px 0 6px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px; border-radius: var(--radius-sm);
+    cursor: pointer; font-size: 13.5px; font-weight: 500;
+    color: var(--text-secondary); transition: all .15s;
+    position: relative;
+  }
+  .nav-item:hover { background: var(--bg-card); color: var(--text); }
+  .nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .nav-badge {
+    margin-left: auto; background: var(--accent);
+    color: #fff; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; border-radius: 20px; min-width: 18px; text-align: center;
+  }
+  .nav-badge.inactive { background: var(--text-muted); }
+  .sidebar-footer {
+    padding: 14px 10px;
+    border-top: 1px solid var(--border);
+  }
+  .user-badge {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: var(--radius-sm);
+    background: var(--bg-card);
+  }
+  .user-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .user-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .user-role { font-size: 11px; color: var(--text-muted); }
+  .logout-btn {
+    margin-left: auto; background: none; border: none;
+    color: var(--text-muted); cursor: pointer; padding: 4px;
+    border-radius: 4px; transition: color .15s;
+  }
+  .logout-btn:hover { color: var(--red); }
+
+  /* ── MAIN ── */
+  .main { margin-left: var(--sidebar-w); flex: 1; display: flex; flex-direction: column; }
+  .topbar {
+    height: var(--topbar-h); background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 28px; display: flex; align-items: center; gap: 16px;
+    position: sticky; top: 0; z-index: 50;
+  }
+  .topbar-title { font-size: 16px; font-weight: 700; color: var(--text); }
+  .topbar-subtitle { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
+  .topbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .search-box {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 6px 12px;
+    width: 220px;
+  }
+  .search-box input {
+    border: none; background: none; outline: none;
+    font-size: 13px; color: var(--text); width: 100%; font-family: var(--font);
+  }
+  .search-box input::placeholder { color: var(--text-muted); }
+  .search-box svg { color: var(--text-muted); width: 14px; height: 14px; flex-shrink: 0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    border: none; transition: all .15s; font-family: var(--font);
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-ghost { background: none; color: var(--text-secondary); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--bg-card); color: var(--text); }
+  .btn-danger { background: var(--red-light); color: var(--red); }
+  .btn-danger:hover { background: var(--red); color: #fff; }
+  .btn-success { background: var(--green-light); color: var(--green); }
+  .btn-success:hover { background: var(--green); color: #fff; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+  /* ── PAGE ── */
+  .page { display: none; padding: 24px 28px; }
+  .page.active { display: block; }
+  .page-empty {
+    text-align: center; padding: 80px 20px;
+    color: var(--text-muted);
+  }
+  .page-empty svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: .4; }
+  .page-empty h3 { font-size: 16px; color: var(--text-secondary); margin-bottom: 8px; }
+  .page-empty p { font-size: 13px; }
+
+  /* ── BLOCKS GRID ── */
+  .blocks-list { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ── BLOCK CARD ── */
+  .block-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    transition: box-shadow .2s;
+    overflow: hidden;
+  }
+  .block-card:hover { box-shadow: var(--shadow-hover); }
+  .block-card.inactive { opacity: .75; }
+
+  .block-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+  }
+  .block-name {
+    font-size: 14px; font-weight: 700; color: var(--text);
+    flex: 1; font-family: var(--mono); letter-spacing: -.02em;
+  }
+  .block-name.empty { color: var(--text-muted); font-style: italic; font-weight: 400; }
+  .block-header-actions { display: flex; align-items: center; gap: 8px; }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); background: #fff;
+    cursor: pointer; transition: all .15s; color: var(--text-secondary);
+  }
+  .icon-btn svg { width: 14px; height: 14px; }
+  .icon-btn:hover { background: var(--bg-card); color: var(--text); }
+  .icon-btn.delete:hover { background: var(--red-light); color: var(--red); border-color: #fca5a5; }
+  .icon-btn.edit:hover { background: var(--accent-light); color: var(--accent); border-color: #93c5fd; }
+
+  /* toggle */
+  .toggle-wrap { display: flex; align-items: center; gap: 8px; }
+  .toggle-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+  .toggle-label.on { color: var(--green); }
+  .toggle-label.off { color: var(--text-muted); }
+  .toggle {
+    position: relative; width: 38px; height: 21px;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle-slider {
+    position: absolute; inset: 0;
+    background: #d1d5db; border-radius: 21px;
+    transition: background .2s;
+  }
+  .toggle-slider::before {
+    content: ''; position: absolute;
+    width: 15px; height: 15px; left: 3px; top: 3px;
+    background: #fff; border-radius: 50%;
+    transition: transform .2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  }
+  .toggle input:checked + .toggle-slider { background: var(--green); }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(17px); }
+
+  /* block body */
+  .block-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+  }
+  .account-col {
+    padding: 16px 18px;
+  }
+  .account-col:first-child { border-right: 1px solid var(--border); }
+  .account-col-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 14px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .account-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: .06em;
+    padding: 3px 8px; border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .account-badge.big { background: var(--big-bg); color: var(--big-color); }
+  .account-badge.small { background: var(--small-bg); color: var(--small-color); }
+
+  .fields-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .field-item { display: flex; flex-direction: column; gap: 3px; }
+  .field-item.full { grid-column: 1 / -1; }
+  .field-label {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    letter-spacing: .05em; text-transform: uppercase;
+  }
+  .field-value-wrap {
+    display: flex; align-items: center; gap: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 8px;
+    min-height: 30px;
+  }
+  .field-value {
+    font-size: 12.5px; font-family: var(--mono);
+    color: var(--text); flex: 1;
+    word-break: break-all;
+    line-height: 1.3;
+  }
+  .field-value.empty { color: var(--text-muted); font-style: italic; font-family: var(--font); font-size: 11px; }
+  .copy-btn {
+    flex-shrink: 0; width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 3px; cursor: pointer; border: none; background: none;
+    color: var(--text-muted); transition: all .15s; padding: 0;
+  }
+  .copy-btn:hover { color: var(--accent); background: var(--accent-light); }
+  .copy-btn svg { width: 11px; height: 11px; }
+  .copy-btn.copied { color: var(--green); }
+
+  /* block footer — notes */
+  .block-footer {
+    border-top: 1px solid var(--border);
+    padding: 12px 18px;
+    background: #fafafa;
+  }
+  .block-footer-title {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    letter-spacing: .05em; text-transform: uppercase; margin-bottom: 8px;
+  }
+  .note-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .note-tag {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px; color: var(--text);
+    display: flex; align-items: flex-start; gap: 8px;
+    max-width: 320px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .note-tag-content { flex: 1; line-height: 1.4; }
+  .note-tag-actions { display: flex; gap: 4px; flex-shrink: 0; margin-top: 1px; }
+  .note-tag-btn {
+    width: 18px; height: 18px; border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; border: none; background: none;
+    color: var(--text-muted); transition: all .15s;
+  }
+  .note-tag-btn:hover { color: var(--red); background: var(--red-light); }
+  .note-tag-btn.edit:hover { color: var(--accent); background: var(--accent-light); }
+  .note-tag-btn svg { width: 10px; height: 10px; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.35); z-index: 1000;
+    align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 14px;
+    width: 100%; max-width: 900px;
+    max-height: 90vh; overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.15);
+    border: 1px solid var(--border);
+  }
+  .modal-header {
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  }
+  .modal-title { font-size: 16px; font-weight: 700; flex: 1; }
+  .modal-close {
+    width: 30px; height: 30px; border-radius: 6px;
+    border: 1px solid var(--border); background: none;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); transition: all .15s;
+  }
+  .modal-close:hover { background: var(--red-light); color: var(--red); border-color: #fca5a5; }
+  .modal-body { padding: 24px; overflow-y: auto; flex: 1; }
+  .modal-footer {
+    padding: 16px 24px; border-top: 1px solid var(--border);
+    display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0;
+  }
+
+  .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .modal-col-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 14px; padding-bottom: 10px;
+    border-bottom: 2px solid var(--border);
+  }
+  .form-group { margin-bottom: 12px; }
+  .form-label {
+    display: block; font-size: 11px; font-weight: 600;
+    color: var(--text-secondary); margin-bottom: 5px;
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .form-input {
+    width: 100%; padding: 8px 11px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 13px; font-family: var(--mono);
+    background: var(--bg-card); color: var(--text); outline: none;
+    transition: border-color .2s, background .2s;
+  }
+  .form-input:focus { border-color: var(--border-focus); background: #fff; }
+
+  /* ── CONFIRM MODAL ── */
+  .confirm-modal {
+    max-width: 380px;
+  }
+  .confirm-body { padding: 24px; text-align: center; }
+  .confirm-icon {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--red-light); display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px;
+  }
+  .confirm-icon svg { width: 24px; height: 24px; color: var(--red); }
+  .confirm-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .confirm-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+  /* ── NOTES PAGE ── */
+  .notes-page-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .notes-panel {
+    background: #fff; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .notes-panel-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px;
+  }
+  .notes-panel-title { font-size: 15px; font-weight: 700; flex: 1; }
+  .notes-list { display: flex; flex-direction: column; gap: 10px; }
+  .note-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 12px 14px;
+  }
+  .note-card-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }
+  .note-card-id {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    font-family: var(--mono);
+  }
+  .note-card-actions { margin-left: auto; display: flex; gap: 4px; }
+  .note-card textarea {
+    width: 100%; border: 1px solid var(--border);
+    border-radius: 5px; padding: 8px;
+    font-size: 13px; font-family: var(--font);
+    background: #fff; color: var(--text); resize: vertical;
+    min-height: 70px; outline: none;
+    transition: border-color .2s;
+  }
+  .note-card textarea:focus { border-color: var(--border-focus); }
+  .note-card-content { font-size: 13px; color: var(--text); line-height: 1.5; }
+  .note-assignment {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .note-assignment-label {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .assigned-block-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--accent-light); color: var(--accent);
+    border: 1px solid #93c5fd; border-radius: 4px;
+    padding: 3px 8px; font-size: 11px; font-weight: 600;
+    font-family: var(--mono);
+  }
+  .assigned-block-chip button {
+    background: none; border: none; cursor: pointer;
+    color: var(--accent); padding: 0; line-height: 1;
+    font-size: 13px; display: flex; align-items: center;
+  }
+  .assigned-block-chip button:hover { color: var(--red); }
+  .assegna-select {
+    padding: 4px 8px; border: 1px solid var(--border);
+    border-radius: 5px; font-size: 12px; font-family: var(--font);
+    background: #fff; color: var(--text); outline: none;
+    cursor: pointer;
+  }
+  .assegna-select:focus { border-color: var(--border-focus); }
+
+  /* add note btn */
+  .add-note-form { margin-top: 12px; }
+  .add-note-form textarea {
+    width: 100%; border: 1px solid var(--border);
+    border-radius: 5px; padding: 9px 11px;
+    font-size: 13px; font-family: var(--font);
+    background: var(--bg-card); color: var(--text);
+    resize: vertical; min-height: 80px; outline: none;
+    transition: border-color .2s;
+  }
+  .add-note-form textarea:focus { border-color: var(--border-focus); background: #fff; }
+  .add-note-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+  /* ── CONTI DA TRADARE ── */
+  .tradare-wrap { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h) - 48px); }
+  .tradare-toolbar {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 16px;
+  }
+  .tradare-textarea {
+    flex: 1; width: 100%;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; font-size: 14px; font-family: var(--mono);
+    background: #fff; color: var(--text);
+    resize: none; outline: none;
+    transition: border-color .2s;
+    line-height: 1.7;
+    box-shadow: var(--shadow);
+  }
+  .tradare-textarea:focus { border-color: var(--border-focus); }
+  .save-indicator {
+    font-size: 11px; color: var(--green);
+    display: flex; align-items: center; gap: 4px;
+    opacity: 0; transition: opacity .3s;
+  }
+  .save-indicator.show { opacity: 1; }
+  .save-indicator svg { width: 12px; height: 12px; }
+
+  /* ── TOAST ── */
+  .toast-container {
+    position: fixed; bottom: 24px; right: 24px;
+    z-index: 9999; display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    background: #fff; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 10px 16px;
+    font-size: 13px; color: var(--text);
+    box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    display: flex; align-items: center; gap: 8px;
+    animation: slideIn .25s ease;
+    border-left: 3px solid var(--accent);
+  }
+  .toast.success { border-left-color: var(--green); }
+  .toast.error { border-left-color: var(--red); }
+  @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  /* responsive */
+  @media (max-width: 900px) {
+    .block-body { grid-template-columns: 1fr; }
+    .account-col:first-child { border-right: none; border-bottom: 1px solid var(--border); }
+    .notes-page-grid { grid-template-columns: 1fr; }
+    .modal-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 700px) {
+    :root { --sidebar-w: 0px; }
+    .sidebar { transform: translateX(-100%); }
+    .fields-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- APP -->
+<div id="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      </div>
+      <span class="sidebar-brand">Trading<span>Hub</span></span>
+      <button class="back-btn" onclick="window.location.href='/app'" title="Back to Dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="15 18 9 12 15 6"/></svg>
+        Dashboard
+      </button>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Account</div>
+      <div class="nav-item active" data-page="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+        Conti Attivi
+        <span class="nav-badge" id="badge-active">0</span>
+      </div>
+      <div class="nav-item" data-page="inactive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        Conti Disattivi
+        <span class="nav-badge inactive" id="badge-inactive">0</span>
+      </div>
+      <div class="nav-section-label">Documenti</div>
+      <div class="nav-item" data-page="notes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14,2H6A2,2,0,0,0,4,4V20a2,2,0,0,0,2,2H18a2,2,0,0,0,2-2V8Z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+        Note
+        <span class="nav-badge" id="badge-notes" style="background:var(--yellow)">0</span>
+      </div>
+      <div class="nav-item" data-page="tradare">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Conti da Tradare
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-badge">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <div>
+          <div class="user-name" id="user-name">—</div>
+          <div class="user-role" id="user-role">Trader</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <span class="topbar-title" id="topbar-title">Conti Attivi</span>
+        <span class="topbar-subtitle" id="topbar-subtitle"></span>
+      </div>
+      <div class="topbar-actions">
+        <div class="search-box" id="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="search-input" placeholder="Cerca blocchi..." />
+        </div>
+        <button class="btn btn-primary" id="new-block-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nuovo Blocco
+        </button>
+      </div>
+    </div>
+
+    <!-- Active -->
+    <div class="page active" id="page-active">
+      <div class="blocks-list" id="active-list"></div>
+    </div>
+
+    <!-- Inactive -->
+    <div class="page" id="page-inactive">
+      <div class="blocks-list" id="inactive-list"></div>
+    </div>
+
+    <!-- Notes -->
+    <div class="page" id="page-notes">
+      <div class="notes-page-grid">
+        <div class="notes-panel">
+          <div class="notes-panel-header">
+            <div class="notes-panel-title">Note Generali</div>
+            <button class="btn btn-primary btn-sm" id="add-note-general-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Aggiungi
+            </button>
+          </div>
+          <div id="add-note-general-form" class="add-note-form" style="display:none">
+            <textarea id="new-note-general-text" placeholder="Scrivi una nota..."></textarea>
+            <div class="add-note-actions">
+              <button class="btn btn-ghost btn-sm" id="cancel-note-general">Annulla</button>
+              <button class="btn btn-primary btn-sm" id="save-note-general">Salva</button>
+            </div>
+          </div>
+          <div class="notes-list" id="notes-general-list"></div>
+        </div>
+        <div class="notes-panel">
+          <div class="notes-panel-header">
+            <div class="notes-panel-title">Note Operative</div>
+            <button class="btn btn-primary btn-sm" id="add-note-op-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Aggiungi
+            </button>
+          </div>
+          <div id="add-note-op-form" class="add-note-form" style="display:none">
+            <textarea id="new-note-op-text" placeholder="Scrivi una nota operativa..."></textarea>
+            <div class="add-note-actions">
+              <button class="btn btn-ghost btn-sm" id="cancel-note-op">Annulla</button>
+              <button class="btn btn-primary btn-sm" id="save-note-op">Salva</button>
+            </div>
+          </div>
+          <div class="notes-list" id="notes-op-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tradare -->
+    <div class="page" id="page-tradare">
+      <div class="tradare-wrap">
+        <div class="tradare-toolbar">
+          <span style="font-size:13px;color:var(--text-secondary)">Board libero per i conti da tradare</span>
+          <div class="save-indicator" id="tradare-saved">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Salvato
+          </div>
+          <button class="btn btn-primary btn-sm" id="tradare-save-btn" style="margin-left:auto">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Salva
+          </button>
+        </div>
+        <textarea class="tradare-textarea" id="tradare-text" placeholder="Scrivi qui i conti da tradare, strategie, simboli, note operative...&#10;&#10;Esempio:&#10;EUR/USD - BUY - lotto 0.5&#10;GBP/JPY - SELL - lotto 0.2"></textarea>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- BLOCK MODAL -->
+<div class="modal-overlay" id="block-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="block-modal-title">Nuovo Blocco</div>
+      <button class="modal-close" id="block-modal-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--accent-light);border:1px solid #93c5fd;border-radius:6px;padding:10px 14px;margin-bottom:20px;font-size:12.5px;color:var(--accent)">
+        Il nome del blocco viene generato automaticamente da: <strong>[Nome cliente BIG] - [Nome cliente SMALL]</strong>
+      </div>
+      <div class="modal-grid">
+        <div>
+          <div class="modal-col-header">
+            <span class="account-badge big">BIG Account</span>
+          </div>
+          <div id="big-fields"></div>
+        </div>
+        <div>
+          <div class="modal-col-header">
+            <span class="account-badge small">SMALL Account</span>
+          </div>
+          <div id="small-fields"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="block-modal-cancel">Annulla</button>
+      <button class="btn btn-primary" id="block-modal-save">Salva Blocco</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal confirm-modal">
+    <div class="modal-header">
+      <div class="modal-title">Conferma eliminazione</div>
+      <button class="modal-close" id="confirm-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="confirm-body">
+      <div class="confirm-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+      </div>
+      <div class="confirm-title">Elimina blocco?</div>
+      <div class="confirm-desc" id="confirm-desc">Questa azione non puo' essere annullata. Tutte le note assegnate verranno dissociate.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="confirm-cancel">Annulla</button>
+      <button class="btn btn-danger" id="confirm-ok">Elimina</button>
+    </div>
+  </div>
+</div>
+
+<!-- NOTE EDIT MODAL -->
+<div class="modal-overlay" id="note-edit-modal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title">Modifica Nota</div>
+      <button class="modal-close" id="note-edit-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <textarea id="note-edit-text" style="width:100%;min-height:120px;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--font);font-size:14px;resize:vertical;outline:none;background:var(--bg-card);color:var(--text)"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="note-edit-cancel">Annulla</button>
+      <button class="btn btn-primary" id="note-edit-save">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ═══════════════════════════════════════════════════
+// STATE & STORAGE
+// ═══════════════════════════════════════════════════
+const FIELDS = [
+  { key: 'vps_number',     label: 'VPS Number' },
+  { key: 'vps_login',      label: 'VPS Login' },
+  { key: 'vps_password',   label: 'VPS Password' },
+  { key: 'email',          label: 'Email' },
+  { key: 'email_psw',      label: 'Email PSW' },
+  { key: 'recovery_email', label: 'Recovery Email' },
+  { key: 'broker_login_psw',label: 'Broker Login PSW' },
+  { key: 'account_login',  label: 'Account Login' },
+  { key: 'account_psw',    label: 'Account PSW' },
+  { key: 'account_server', label: 'Account Server' },
+  { key: 'nome_cliente',   label: 'Nome Cliente' },
+];
+
+function emptyAccount() {
+  const o = {};
+  FIELDS.forEach(f => o[f.key] = '');
+  return o;
+}
+
+let state = { blocks: [], notes: [], tradare: '' };
+
+let _persistTimer = null;
+function persist() {
+  clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(_flushState, 600);
+}
+
+async function _flushState() {
+  const token = localStorage.getItem('token');
+  if (!token) return;
+  try {
+    await fetch('/trading-hub/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify(state)
+    });
+  } catch(e) {
+    console.error('[TradingHub] save failed', e);
+  }
+}
+
+function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+
+// ═══════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════
+const PAGE_META = {
+  active:   { title: 'Conti Attivi',    subtitle: 'Account attivi e operativi' },
+  inactive: { title: 'Conti Disattivi', subtitle: 'Account temporaneamente disattivati' },
+  notes:    { title: 'Note',            subtitle: 'Note generali e operative' },
+  tradare:  { title: 'Conti da Tradare',subtitle: 'Board libero operativo' },
+};
+
+let currentPage = 'active';
+
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const page = item.dataset.page;
+    navigateTo(page);
+  });
+});
+
+function navigateTo(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
+  document.getElementById('topbar-title').textContent = PAGE_META[page].title;
+  document.getElementById('topbar-subtitle').textContent = PAGE_META[page].subtitle;
+  const newBlockBtn = document.getElementById('new-block-btn');
+  const searchWrap  = document.getElementById('search-wrap');
+  newBlockBtn.style.display = (page === 'active' || page === 'inactive') ? '' : 'none';
+  searchWrap.style.display  = (page === 'active' || page === 'inactive') ? '' : 'none';
+  render();
+}
+
+// ═══════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+// ═══════════════════════════════════════════════════
+// COPY
+// ═══════════════════════════════════════════════════
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1200);
+    toast('Copiato!', 'success');
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// BLOCK NAME
+// ═══════════════════════════════════════════════════
+function blockName(block) {
+  const b = (block.big.nome_cliente   || '').trim();
+  const s = (block.small.nome_cliente || '').trim();
+  if (!b && !s) return null;
+  if (b && s) return b + ' - ' + s;
+  return b || s;
+}
+
+// ═══════════════════════════════════════════════════
+// RENDER BADGES
+// ═══════════════════════════════════════════════════
+function updateBadges() {
+  const active   = state.blocks.filter(b => b.status === 'active').length;
+  const inactive = state.blocks.filter(b => b.status === 'inactive').length;
+  document.getElementById('badge-active').textContent   = active;
+  document.getElementById('badge-inactive').textContent = inactive;
+  document.getElementById('badge-notes').textContent    = state.notes.length;
+}
+
+// ═══════════════════════════════════════════════════
+// RENDER FIELD VALUE
+// ═══════════════════════════════════════════════════
+function renderFieldValue(value) {
+  const hasVal = value && value.trim();
+  return `
+    <div class="field-value-wrap">
+      <span class="field-value${hasVal ? '' : ' empty'}">${hasVal ? escHtml(value) : 'N/A'}</span>
+      ${hasVal ? `<button class="copy-btn" data-copy="${escAttr(value)}" title="Copia">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </button>` : ''}
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+// RENDER BLOCK CARD
+// ═══════════════════════════════════════════════════
+function renderBlock(block) {
+  const name     = blockName(block);
+  const isActive = block.status === 'active';
+  const assignedNotes = state.notes.filter(n => n.assigned_block_id === block.id);
+
+  const renderCol = (acct, type) => `
+    <div class="account-col">
+      <div class="account-col-header">
+        <span class="account-badge ${type}">${type.toUpperCase()}</span>
+      </div>
+      <div class="fields-grid">
+        ${FIELDS.map((f, i) => `
+          <div class="field-item${i === FIELDS.length - 1 ? ' full' : ''}">
+            <div class="field-label">${f.label}</div>
+            ${renderFieldValue(acct[f.key])}
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+
+  const footerHtml = assignedNotes.length > 0 ? `
+    <div class="block-footer">
+      <div class="block-footer-title">Note Assegnate (${assignedNotes.length})</div>
+      <div class="note-tags">
+        ${assignedNotes.map(n => `
+          <div class="note-tag">
+            <div class="note-tag-content">${escHtml(n.content)}</div>
+            <div class="note-tag-actions">
+              <button class="note-tag-btn edit" data-note-edit="${n.id}" title="Modifica">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+              <button class="note-tag-btn" data-note-unassign="${n.id}" title="Rimuovi assegnazione">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : '';
+
+  const div = document.createElement('div');
+  div.className = 'block-card' + (isActive ? '' : ' inactive');
+  div.dataset.id = block.id;
+  div.innerHTML = `
+    <div class="block-header">
+      <div class="block-name${name ? '' : ' empty'}">${name ? escHtml(name) : 'Nome non impostato'}</div>
+      <div class="block-header-actions">
+        <div class="toggle-wrap">
+          <span class="toggle-label ${isActive ? 'on' : 'off'}">${isActive ? 'ON' : 'OFF'}</span>
+          <label class="toggle" title="${isActive ? 'Disattiva' : 'Attiva'}">
+            <input type="checkbox" ${isActive ? 'checked' : ''} data-toggle="${block.id}" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <button class="icon-btn edit" data-edit="${block.id}" title="Modifica">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="icon-btn delete" data-delete="${block.id}" title="Elimina">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="block-body">
+      ${renderCol(block.big,   'big')}
+      ${renderCol(block.small, 'small')}
+    </div>
+    ${footerHtml}`;
+
+  // copy buttons
+  div.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => copyText(btn.dataset.copy, btn));
+  });
+  // toggle
+  div.querySelector(`[data-toggle="${block.id}"]`).addEventListener('change', e => {
+    toggleBlock(block.id, e.target.checked);
+  });
+  // edit
+  div.querySelector(`[data-edit="${block.id}"]`).addEventListener('click', () => openBlockModal(block.id));
+  // delete
+  div.querySelector(`[data-delete="${block.id}"]`).addEventListener('click', () => confirmDelete(block.id));
+  // note unassign
+  div.querySelectorAll('[data-note-unassign]').forEach(btn => {
+    btn.addEventListener('click', () => { unassignNote(btn.dataset.noteUnassign); });
+  });
+  // note edit (from block)
+  div.querySelectorAll('[data-note-edit]').forEach(btn => {
+    btn.addEventListener('click', () => { openNoteEdit(btn.dataset.noteEdit); });
+  });
+
+  return div;
+}
+
+// ═══════════════════════════════════════════════════
+// RENDER PAGES
+// ═══════════════════════════════════════════════════
+function render() {
+  updateBadges();
+  const q = document.getElementById('search-input').value.toLowerCase();
+
+  function filterBlock(b) {
+    if (!q) return true;
+    const haystack = [
+      b.big.nome_cliente, b.small.nome_cliente,
+      b.big.account_login, b.small.account_login,
+      b.big.account_server, b.small.account_server,
+      b.big.email, b.small.email,
+    ].join(' ').toLowerCase();
+    return haystack.includes(q);
+  }
+
+  // Active list
+  const activeEl   = document.getElementById('active-list');
+  const inactiveEl = document.getElementById('inactive-list');
+  activeEl.innerHTML   = '';
+  inactiveEl.innerHTML = '';
+
+  const activeBlocks   = state.blocks.filter(b => b.status === 'active'   && filterBlock(b));
+  const inactiveBlocks = state.blocks.filter(b => b.status === 'inactive' && filterBlock(b));
+
+  if (activeBlocks.length === 0) {
+    activeEl.innerHTML = emptyState('Nessun conto attivo', 'Crea un nuovo blocco con il pulsante in alto a destra.');
+  } else {
+    activeBlocks.forEach(b => activeEl.appendChild(renderBlock(b)));
+  }
+
+  if (inactiveBlocks.length === 0) {
+    inactiveEl.innerHTML = emptyState('Nessun conto disattivo', 'I blocchi disattivati appariranno qui.');
+  } else {
+    inactiveBlocks.forEach(b => inactiveEl.appendChild(renderBlock(b)));
+  }
+
+  renderNotes();
+}
+
+function emptyState(title, desc) {
+  return `<div class="page-empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    <h3>${title}</h3><p>${desc}</p>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+// TOGGLE BLOCK
+// ═══════════════════════════════════════════════════
+function toggleBlock(id, active) {
+  const b = state.blocks.find(x => x.id === id);
+  if (!b) return;
+  b.status = active ? 'active' : 'inactive';
+  b.updated_at = new Date().toISOString();
+  persist();
+  render();
+  toast(active ? 'Blocco attivato' : 'Blocco disattivato', active ? 'success' : 'info');
+}
+
+// ═══════════════════════════════════════════════════
+// BLOCK MODAL
+// ═══════════════════════════════════════════════════
+let editingBlockId = null;
+
+function buildFormFields(prefix, data = {}) {
+  const container = document.getElementById(prefix + '-fields');
+  container.innerHTML = '';
+  FIELDS.forEach(f => {
+    const div = document.createElement('div');
+    div.className = 'form-group';
+    div.innerHTML = `
+      <label class="form-label">${f.label}</label>
+      <input class="form-input" type="text" id="${prefix}-${f.key}" value="${escAttr(data[f.key] || '')}" placeholder="${f.label}" autocomplete="off" />`;
+    container.appendChild(div);
+  });
+
+  // live update block name preview
+  if (f => f.key === 'nome_cliente') {
+    const el = container.querySelector(`#${prefix}-nome_cliente`);
+    if (el) el.addEventListener('input', updateModalTitle);
+  }
+  container.querySelectorAll('.form-input').forEach(inp => inp.addEventListener('input', updateModalTitle));
+}
+
+function updateModalTitle() {
+  const bigName   = (document.getElementById('big-nome_cliente')   || {}).value   || '';
+  const smallName = (document.getElementById('small-nome_cliente') || {}).value || '';
+  let name = '';
+  if (bigName.trim() && smallName.trim()) name = bigName.trim() + ' - ' + smallName.trim();
+  else name = (bigName || smallName).trim();
+  const preview = document.getElementById('block-modal-name-preview');
+  if (preview) preview.textContent = name || 'Nome non impostato';
+}
+
+function openBlockModal(id = null) {
+  editingBlockId = id;
+  const block = id ? state.blocks.find(b => b.id === id) : null;
+  document.getElementById('block-modal-title').textContent = id ? 'Modifica Blocco' : 'Nuovo Blocco';
+
+  // inject name preview
+  const infoBox = document.querySelector('#block-modal .modal-body > div:first-child');
+  if (!document.getElementById('block-modal-name-preview')) {
+    const prev = document.createElement('div');
+    prev.style.cssText = 'margin-top:10px;font-size:13px;font-weight:700;font-family:var(--mono);color:var(--text)';
+    prev.innerHTML = 'Anteprima nome: <span id="block-modal-name-preview" style="color:var(--accent)">Nome non impostato</span>';
+    infoBox.appendChild(prev);
+  }
+
+  buildFormFields('big',   block ? block.big   : emptyAccount());
+  buildFormFields('small', block ? block.small : emptyAccount());
+  updateModalTitle();
+  document.getElementById('block-modal').classList.add('open');
+}
+
+function closeBlockModal() {
+  document.getElementById('block-modal').classList.remove('open');
+  editingBlockId = null;
+}
+
+function collectAccount(prefix) {
+  const o = {};
+  FIELDS.forEach(f => {
+    o[f.key] = (document.getElementById(prefix + '-' + f.key) || {}).value || '';
+  });
+  return o;
+}
+
+document.getElementById('block-modal-save').addEventListener('click', () => {
+  const big   = collectAccount('big');
+  const small = collectAccount('small');
+  if (editingBlockId) {
+    const b = state.blocks.find(x => x.id === editingBlockId);
+    b.big        = big;
+    b.small      = small;
+    b.updated_at = new Date().toISOString();
+    toast('Blocco aggiornato', 'success');
+  } else {
+    state.blocks.unshift({
+      id: genId(), status: 'active',
+      big, small,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    toast('Blocco creato', 'success');
+  }
+  persist(); render(); closeBlockModal();
+});
+
+document.getElementById('block-modal-close').addEventListener('click', closeBlockModal);
+document.getElementById('block-modal-cancel').addEventListener('click', closeBlockModal);
+document.getElementById('block-modal').addEventListener('click', e => { if (e.target === document.getElementById('block-modal')) closeBlockModal(); });
+
+document.getElementById('new-block-btn').addEventListener('click', () => openBlockModal());
+
+// ═══════════════════════════════════════════════════
+// DELETE BLOCK
+// ═══════════════════════════════════════════════════
+let pendingDeleteId = null;
+
+function confirmDelete(id) {
+  pendingDeleteId = id;
+  document.getElementById('confirm-modal').classList.add('open');
+}
+
+document.getElementById('confirm-ok').addEventListener('click', () => {
+  if (!pendingDeleteId) return;
+  // unassign notes
+  state.notes.forEach(n => { if (n.assigned_block_id === pendingDeleteId) n.assigned_block_id = null; });
+  state.blocks = state.blocks.filter(b => b.id !== pendingDeleteId);
+  persist(); render();
+  document.getElementById('confirm-modal').classList.remove('open');
+  pendingDeleteId = null;
+  toast('Blocco eliminato', 'info');
+});
+document.getElementById('confirm-cancel').addEventListener('click', () => { document.getElementById('confirm-modal').classList.remove('open'); pendingDeleteId = null; });
+document.getElementById('confirm-close').addEventListener('click', () => { document.getElementById('confirm-modal').classList.remove('open'); pendingDeleteId = null; });
+
+// ═══════════════════════════════════════════════════
+// NOTES
+// ═══════════════════════════════════════════════════
+function renderNoteCard(note) {
+  const assignedBlock = note.assigned_block_id ? state.blocks.find(b => b.id === note.assigned_block_id) : null;
+  const blockLabel    = assignedBlock ? (blockName(assignedBlock) || 'Blocco senza nome') : null;
+
+  const div = document.createElement('div');
+  div.className = 'note-card';
+  div.innerHTML = `
+    <div class="note-card-header">
+      <span class="note-card-id">#${note.id.slice(-5).toUpperCase()}</span>
+      <div class="note-card-actions">
+        <button class="btn btn-ghost btn-sm" data-note-edit-modal="${note.id}" title="Modifica">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="btn btn-danger btn-sm" data-note-delete="${note.id}" title="Elimina">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="note-card-content">${escHtml(note.content)}</div>
+    <div class="note-assignment">
+      <span class="note-assignment-label">Assegnata a:</span>
+      ${blockLabel
+        ? `<span class="assigned-block-chip">${escHtml(blockLabel)}<button data-note-unassign="${note.id}" title="Rimuovi">x</button></span>`
+        : `<select class="assegna-select" data-assegna-note="${note.id}">
+            <option value="">-- Seleziona blocco --</option>
+            ${state.blocks.map(b => `<option value="${b.id}">${escHtml(blockName(b) || 'Blocco ' + b.id.slice(-5).toUpperCase())} (${b.status === 'active' ? 'Attivo' : 'Disattivo'})</option>`).join('')}
+           </select>
+           <button class="btn btn-primary btn-sm" data-assegna-confirm="${note.id}">Assegna</button>`
+      }
+    </div>`;
+
+  div.querySelector(`[data-note-edit-modal="${note.id}"]`).addEventListener('click', () => openNoteEdit(note.id));
+  div.querySelector(`[data-note-delete="${note.id}"]`).addEventListener('click', () => {
+    state.notes = state.notes.filter(n => n.id !== note.id);
+    persist(); render();
+    toast('Nota eliminata', 'info');
+  });
+
+  const unassignBtn = div.querySelector(`[data-note-unassign="${note.id}"]`);
+  if (unassignBtn) unassignBtn.addEventListener('click', () => unassignNote(note.id));
+
+  const assegnaBtn = div.querySelector(`[data-assegna-confirm="${note.id}"]`);
+  if (assegnaBtn) {
+    assegnaBtn.addEventListener('click', () => {
+      const sel = div.querySelector(`[data-assegna-note="${note.id}"]`);
+      if (sel && sel.value) {
+        const n = state.notes.find(x => x.id === note.id);
+        if (n) { n.assigned_block_id = sel.value; persist(); render(); toast('Nota assegnata!', 'success'); }
+      } else {
+        toast('Seleziona un blocco', 'error');
+      }
+    });
+  }
+
+  return div;
+}
+
+function renderNotes() {
+  const genList = document.getElementById('notes-general-list');
+  const opList  = document.getElementById('notes-op-list');
+  genList.innerHTML = '';
+  opList.innerHTML  = '';
+  const general    = state.notes.filter(n => n.type === 'general');
+  const operative  = state.notes.filter(n => n.type === 'operative');
+  if (general.length === 0)   genList.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">Nessuna nota. Aggiungine una sopra.</div>';
+  else general.forEach(n => genList.appendChild(renderNoteCard(n)));
+  if (operative.length === 0) opList.innerHTML  = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">Nessuna nota. Aggiungine una sopra.</div>';
+  else operative.forEach(n => opList.appendChild(renderNoteCard(n)));
+}
+
+function unassignNote(noteId) {
+  const n = state.notes.find(x => x.id === noteId);
+  if (n) { n.assigned_block_id = null; persist(); render(); toast('Assegnazione rimossa', 'info'); }
+}
+
+// Add note general
+document.getElementById('add-note-general-btn').addEventListener('click', () => {
+  document.getElementById('add-note-general-form').style.display = '';
+  document.getElementById('new-note-general-text').focus();
+});
+document.getElementById('cancel-note-general').addEventListener('click', () => {
+  document.getElementById('add-note-general-form').style.display = 'none';
+  document.getElementById('new-note-general-text').value = '';
+});
+document.getElementById('save-note-general').addEventListener('click', () => {
+  const txt = document.getElementById('new-note-general-text').value.trim();
+  if (!txt) { toast('Scrivi qualcosa prima di salvare', 'error'); return; }
+  state.notes.unshift({ id: genId(), type: 'general', content: txt, assigned_block_id: null, created_at: new Date().toISOString() });
+  document.getElementById('new-note-general-text').value = '';
+  document.getElementById('add-note-general-form').style.display = 'none';
+  persist(); render(); toast('Nota salvata', 'success');
+});
+
+// Add note operative
+document.getElementById('add-note-op-btn').addEventListener('click', () => {
+  document.getElementById('add-note-op-form').style.display = '';
+  document.getElementById('new-note-op-text').focus();
+});
+document.getElementById('cancel-note-op').addEventListener('click', () => {
+  document.getElementById('add-note-op-form').style.display = 'none';
+  document.getElementById('new-note-op-text').value = '';
+});
+document.getElementById('save-note-op').addEventListener('click', () => {
+  const txt = document.getElementById('new-note-op-text').value.trim();
+  if (!txt) { toast('Scrivi qualcosa prima di salvare', 'error'); return; }
+  state.notes.unshift({ id: genId(), type: 'operative', content: txt, assigned_block_id: null, created_at: new Date().toISOString() });
+  document.getElementById('new-note-op-text').value = '';
+  document.getElementById('add-note-op-form').style.display = 'none';
+  persist(); render(); toast('Nota operativa salvata', 'success');
+});
+
+// ═══════════════════════════════════════════════════
+// NOTE EDIT MODAL
+// ═══════════════════════════════════════════════════
+let editingNoteId = null;
+
+function openNoteEdit(noteId) {
+  const n = state.notes.find(x => x.id === noteId);
+  if (!n) return;
+  editingNoteId = noteId;
+  document.getElementById('note-edit-text').value = n.content;
+  document.getElementById('note-edit-modal').classList.add('open');
+}
+
+document.getElementById('note-edit-save').addEventListener('click', () => {
+  if (!editingNoteId) return;
+  const n = state.notes.find(x => x.id === editingNoteId);
+  const txt = document.getElementById('note-edit-text').value.trim();
+  if (!txt) { toast('La nota non puo essere vuota', 'error'); return; }
+  if (n) { n.content = txt; persist(); render(); toast('Nota aggiornata', 'success'); }
+  document.getElementById('note-edit-modal').classList.remove('open');
+  editingNoteId = null;
+});
+document.getElementById('note-edit-cancel').addEventListener('click', () => { document.getElementById('note-edit-modal').classList.remove('open'); editingNoteId = null; });
+document.getElementById('note-edit-close').addEventListener('click', () => { document.getElementById('note-edit-modal').classList.remove('open'); editingNoteId = null; });
+
+// ═══════════════════════════════════════════════════
+// TRADARE
+// ═══════════════════════════════════════════════════
+document.getElementById('tradare-save-btn').addEventListener('click', saveTradare);
+document.getElementById('tradare-text').addEventListener('input', () => {
+  clearTimeout(window._tradareTimer);
+  window._tradareTimer = setTimeout(saveTradare, 2000);
+});
+
+function saveTradare() {
+  state.tradare = document.getElementById('tradare-text').value;
+  persist();
+  const ind = document.getElementById('tradare-saved');
+  ind.classList.add('show');
+  setTimeout(() => ind.classList.remove('show'), 2000);
+}
+
+// ═══════════════════════════════════════════════════
+// SEARCH
+// ═══════════════════════════════════════════════════
+document.getElementById('search-input').addEventListener('input', () => render());
+
+// ═══════════════════════════════════════════════════
+// ESCAPE UTILS
+// ═══════════════════════════════════════════════════
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ═══════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════
+function init() {
+  navigateTo('active');
+}
+
+// Boot: verify token, check permission, load state, then init
+(async function() {
+  const token = localStorage.getItem('token');
+  if (!token) { window.location.href = '/'; return; }
+
+  const authHeader = { 'Authorization': 'Bearer ' + token };
+
+  // 1. Auth + permission check
+  try {
+    const res = await fetch('/dashboard/', { headers: authHeader });
+    if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/'; return; }
+    const data = await res.json();
+    if (data.can_use_trading_hub === false) { window.location.href = '/app'; return; }
+
+    const name = data.username || 'User';
+    document.getElementById('user-name').textContent = name;
+    document.getElementById('user-avatar').textContent = name.charAt(0).toUpperCase();
+    document.getElementById('user-role').textContent = data.role === 'admin' ? 'Admin' : 'Trader';
+  } catch(e) {
+    window.location.href = '/';
+    return;
+  }
+
+  // 2. Load persisted state from server
+  try {
+    const res = await fetch('/trading-hub/state', { headers: authHeader });
+    if (res.ok) {
+      const saved = await res.json();
+      state.blocks  = saved.blocks  || [];
+      state.notes   = saved.notes   || [];
+      state.tradare = saved.tradare || '';
+    }
+  } catch(e) {
+    console.error('[TradingHub] failed to load state', e);
+  }
+
+  // 3. Populate tradare textarea now that state is loaded
+  document.getElementById('tradare-text').value = state.tradare;
+
+  init();
+})();
+</script>
+</body>
+</html>

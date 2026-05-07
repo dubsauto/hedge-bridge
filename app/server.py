@@ -11,7 +11,8 @@ from app.api.auth_routes import router as auth_router
 from app.api.admin_routes import router as admin_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.api.cycle_calculator_routes import router as cycle_calculator_router
-from app.api.vps_routes import router as vps_router 
+from app.api.vps_routes import router as vps_router
+from app.api.trading_hub_routes import router as trading_hub_router
 from hedgebridge.rpc_pool import rpc_pool
 from hedgebridge.listener_manager import listener_manager
 
@@ -77,6 +78,10 @@ async def serve_vps_connect():
 async def serve_cycle_calculator():
     return FileResponse("static/cycle-calculator.html")
 
+@app.get("/trading-hub")
+async def serve_trading_hub():
+    return FileResponse("static/trading-hub.html")
+
 
 # =========================
 # Include API Routers
@@ -86,7 +91,8 @@ app.include_router(admin_router)
 app.include_router(metaconnect_router)
 app.include_router(dashboard_router)        # ← Added this
 app.include_router(cycle_calculator_router)
-app.include_router(vps_router)                    # ← NEW
+app.include_router(vps_router)
+app.include_router(trading_hub_router)
 
 
 

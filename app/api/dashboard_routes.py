@@ -34,6 +34,7 @@ async def dashboard(
         permission = db.query(UserPermission).filter(UserPermission.user_id == user_id).first()
         can_trade = permission.can_trade if permission else False
         can_use_calculator = permission.can_use_calculator if permission else False
+        can_use_trading_hub = permission.can_use_trading_hub if permission else True
 
         return {
             "message": "Welcome to Hedge Bridge Dashboard",
@@ -41,7 +42,8 @@ async def dashboard(
             "role": user.role,
             "approval_status": user.approval_status,
             "can_trade": can_trade,
-            "can_use_calculator": can_use_calculator
+            "can_use_calculator": can_use_calculator,
+            "can_use_trading_hub": can_use_trading_hub
         }
 
     except JWTError:

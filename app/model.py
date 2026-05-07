@@ -45,6 +45,7 @@ class UserPermission(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     can_trade = Column(Boolean, default=True)
     can_use_calculator = Column(Boolean, default=True)
+    can_use_trading_hub = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class TradingAccount(Base):
@@ -365,6 +366,14 @@ class CycleSlot(Base):
 # =========================
 # COMPUTED PHASES  (read-only cache — re-generated on every "Calculate")
 # =========================
+class TradingHubState(Base):
+    __tablename__ = "trading_hub_state"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    data    = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class CyclePhase(Base):
     """
     One row per phase, written (or re-written) whenever the user hits
