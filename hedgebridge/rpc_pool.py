@@ -210,6 +210,10 @@ class RpcConnectionPool:
                 f"resetting SDK and retrying → {account_id}"
             )
             await self._reset_sdk_safely(stale_instance=stale_api)
+            if self._api is None:
+                raise Exception(
+                    f"[RpcPool] SDK unavailable after reset → {account_id}"
+                )
             try:
                 account = await self._api.metatrader_account_api.get_account(account_id)
                 print(f"[RpcPool] SDK reset OK — account fetched → {account_id}")
@@ -349,7 +353,7 @@ class RpcConnectionPool:
         print(f"[RpcPool] Waiting for broker connection → {account_id}")
         for i in range(8):
             try:
-                await account.reload()
+                await asyncio.wait_for(account.reload(), timeout=5)
             except Exception:
                 pass
 
@@ -369,7 +373,13 @@ class RpcConnectionPool:
             )
 
         connection = account.get_rpc_connection()
-        await connection.connect()
+        try:
+            await asyncio.wait_for(connection.connect(), timeout=15)
+        except asyncio.TimeoutError:
+            await self._close_connection_safely(connection, account_id)
+            raise Exception(
+                f"[RpcPool] connection.connect() timed out → {account_id}"
+            )
 
         try:
             await asyncio.wait_for(connection.wait_synchronized(), timeout=30)

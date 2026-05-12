@@ -12,8 +12,11 @@ import time
 
 GRACE_PERIOD = 60
 KEEPALIVE_INTERVAL = 45
-SYNC_TIMEOUT = 180
+SYNC_TIMEOUT = 60      # per attempt; 3 attempts = 3 min max before reconnect
 DEPLOY_WAIT = 8
+CONNECT_TIMEOUT = 15   # connection.connect() hard deadline
+CLOSE_TIMEOUT = 10     # connection.close() hard deadline
+RELOAD_TIMEOUT = 5     # account.reload() hard deadline
 GLOBAL_OUTAGE_THRESHOLD = 0.6
 GLOBAL_OUTAGE_WINDOW = 10.0
 GLOBAL_OUTAGE_COOLDOWN = 45
@@ -53,6 +56,19 @@ class ListenerManager:
         self._disconnect_times.pop(account_id, None)
         self._connected_at.pop(account_id, None)
         self._attaching.discard(account_id)
+
+    # =====================================
+    # SAFE STREAM CLOSE
+    # =====================================
+    async def _close_stream_safely(self, connection, account_id: str):
+        """Close a streaming connection with a hard timeout so callers never hang."""
+        try:
+            await asyncio.wait_for(connection.close(), timeout=CLOSE_TIMEOUT)
+            print(f"[LM] Closed stream → {account_id}")
+        except asyncio.TimeoutError:
+            print(f"[LM] Stream close timed out → {account_id}")
+        except Exception as e:
+            print(f"[LM] Stream close error → {account_id}: {e}")
 
     # =====================================
     # SDK MANAGEMENT
@@ -354,10 +370,7 @@ class ListenerManager:
                     connection.remove_synchronization_listener(listener)
             except Exception:
                 pass
-            try:
-                await connection.close()
-            except Exception:
-                pass
+            await self._close_stream_safely(connection, account_id)
             try:
                 remove_connection(account_id)
             except Exception:
@@ -505,7 +518,7 @@ class ListenerManager:
 
             for i in range(timeout):
                 try:
-                    await account.reload()
+                    await asyncio.wait_for(account.reload(), timeout=RELOAD_TIMEOUT)
                 except Exception:
                     pass
 
@@ -525,15 +538,18 @@ class ListenerManager:
 
             connection = account.get_streaming_connection()
             print(f"🔗 Connecting stream → {account_id}")
-            await connection.connect()
+            try:
+                await asyncio.wait_for(connection.connect(), timeout=CONNECT_TIMEOUT)
+            except asyncio.TimeoutError:
+                await self._close_stream_safely(connection, account_id)
+                raise Exception(
+                    f"[LM] connection.connect() timed out → {account_id}"
+                )
 
             async with self._lock:
                 if get_connection(account_id) is not None:
                     print(f"⚠️ Concurrent attach beat us → {account_id}, closing duplicate")
-                    try:
-                        await connection.close()
-                    except Exception:
-                        pass
+                    await self._close_stream_safely(connection, account_id)
                     return
 
                 # Pass both IDs to the listener so disconnect callbacks use
@@ -561,10 +577,7 @@ class ListenerManager:
         except Exception as e:
             print(f"❌ Attach failed {acc.id}: {e}")
             if connection:
-                try:
-                    await connection.close()
-                except Exception:
-                    pass
+                await self._close_stream_safely(connection, account_id)
 
         finally:
             async with self._lock:
@@ -656,7 +669,7 @@ class ListenerManager:
                 except Exception:
                     pass
 
-            await connection.close()
+            await self._close_stream_safely(connection, account_id)
             remove_connection(account_id)
 
             if listener:
@@ -690,18 +703,13 @@ class ListenerManager:
         self._cancel_sync_task(account_id)
 
         if connection:
-            try:
-                if listener:
-                    try:
-                        connection.remove_synchronization_listener(listener)
-                    except Exception:
-                        pass
-
-                await connection.close()
-                remove_connection(account_id)
-
-            except Exception:
-                pass
+            if listener:
+                try:
+                    connection.remove_synchronization_listener(listener)
+                except Exception:
+                    pass
+            await self._close_stream_safely(connection, account_id)
+            remove_connection(account_id)
 
         if listener:
             try:
@@ -714,10 +722,7 @@ class ListenerManager:
         print(f"♻️ Marked for reconnection → {account_id}")
 
         if not self._global_outage:
-            try:
-                self._reconnect_queue.put_nowait(account_id)
-            except asyncio.QueueFull:
-                pass
+            self._reconnect_queue.put_nowait(account_id)
 
 
 # =====================================
