@@ -10,24 +10,33 @@ class RpcConnectionPool:
     def __init__(self):
         self._api = None
 
+        # Per-account state — all dicts are cleaned up in _purge_account()
+        # so they never accumulate ghost entries for removed accounts.
         self._accounts: Dict[str, Any] = {}
         self._connections: Dict[str, Any] = {}
         self._verified_at: Dict[str, float] = {}
         self._failure_count: Dict[str, int] = {}
         self._last_used: Dict[str, float] = {}
+        self._cooldown_until: Dict[str, float] = {}
 
-        # Per-account build locks — prevents duplicate builds for same account
+        # Per-account build locks — one Lock per account ID, created on demand.
+        # Locks are intentionally NOT removed because a coroutine waiting on a
+        # lock holds a reference to the exact object; replacing it races.
+        # asyncio.Lock is ~56 bytes, so 100 accounts = 5.6 KB — negligible.
         self._account_locks: Dict[str, asyncio.Lock] = {}
 
-        # Cooldown: after a hard reset, don't immediately retry
-        self._cooldown_until: Dict[str, float] = {}
-        self._cooldown_seconds = 60            # after watchdog hard-reset
-        self._build_fail_cooldown = 300        # after build failure (5 min — broker may be offline)
+        # Serialises SDK creation/close so concurrent get_account() failures
+        # don't each spin up a new MetaApi instance and leak the old ones.
+        self._sdk_reset_lock: asyncio.Lock = asyncio.Lock()
+
+        # Cooldown tuning
+        self._cooldown_seconds = 60        # after watchdog hard-reset
+        self._build_fail_cooldown = 300    # after build failure (5 min)
 
         self._verify_ttl = 10
         self._max_failures = 3
-        self._watchdog_interval = 120          # probe every 2 min instead of 1
-        self._idle_evict_seconds = 5 * 60     # evict after 5 min idle (was 30)
+        self._watchdog_interval = 120
+        self._idle_evict_seconds = 5 * 60
         self._watchdog_task: Optional[asyncio.Task] = None
 
         self._hard_reset_times: list = []
@@ -37,10 +46,22 @@ class RpcConnectionPool:
         # Limit simultaneous connection builds to avoid overloading 0.5 CPU
         self._build_semaphore = asyncio.Semaphore(2)
 
+    # =====================================
+    # HELPERS
+    # =====================================
     def _get_account_lock(self, account_id: str) -> asyncio.Lock:
         if account_id not in self._account_locks:
             self._account_locks[account_id] = asyncio.Lock()
         return self._account_locks[account_id]
+
+    def _purge_account(self, account_id: str):
+        """Remove all per-account dict entries so memory is reclaimed."""
+        self._accounts.pop(account_id, None)
+        self._connections.pop(account_id, None)
+        self._verified_at.pop(account_id, None)
+        self._failure_count.pop(account_id, None)
+        self._last_used.pop(account_id, None)
+        self._cooldown_until.pop(account_id, None)
 
     # =====================================
     # WATCHDOG
@@ -64,9 +85,9 @@ class RpcConnectionPool:
 
         for account_id in account_ids:
             # ─── IDLE EVICTION ───────────────────────────────────────────
-            # If no caller has used this connection within the eviction
-            # window, close it cleanly and free the memory.  The next
-            # poll from the frontend will rebuild it on demand.
+            # Close and fully purge connections nobody has used for a while.
+            # No cooldown is set — the account was healthy, just idle; it
+            # should reconnect immediately when next requested.
             last_used = self._last_used.get(account_id, 0)
             idle_seconds = now - last_used
 
@@ -76,7 +97,10 @@ class RpcConnectionPool:
                     f"({idle_seconds / 60:.1f} min idle) → {account_id}"
                 )
                 async with self._get_account_lock(account_id):
-                    await self._hard_reset(account_id, count_toward_sdk_reset=False)
+                    connection = self._connections.get(account_id)
+                    if connection:
+                        await self._close_connection_safely(connection, account_id)
+                    self._purge_account(account_id)   # full cleanup, no cooldown
                 continue
 
             # ─── NORMAL HEALTH PROBE ─────────────────────────────────────
@@ -104,14 +128,56 @@ class RpcConnectionPool:
                         await self._hard_reset(account_id)
 
     # =====================================
-    # API SINGLETON
+    # API SINGLETON + SAFE RESET
     # =====================================
     async def _get_api(self):
         if self._api is None:
             self._api = get_metaapi_client()
         return self._api
 
-    def _maybe_reset_sdk(self):
+    async def _reset_sdk_safely(self, stale_instance=None):
+        """
+        Replace the MetaApi SDK client with a fresh one and properly close the
+        old instance so its WebSocket threads and memory are freed.
+
+        Serialised by _sdk_reset_lock so that many coroutines that all notice
+        the same stale SDK at the same time only produce ONE new instance.
+
+        stale_instance — the api object the caller saw fail.  If self._api has
+                         already been swapped by another coroutine by the time
+                         we acquire the lock, we skip creating another new one.
+        """
+        async with self._sdk_reset_lock:
+            # Another coroutine beat us to it
+            if stale_instance is not None and self._api is not stale_instance:
+                print("[RpcPool] SDK already reset by another coroutine — skipping")
+                return
+
+            old = self._api
+            print("[RpcPool] Resetting MetaApi SDK...")
+
+            try:
+                self._api = reset_metaapi_client()
+                self._hard_reset_times.clear()
+                print("[RpcPool] MetaApi SDK reset complete")
+            except Exception as e:
+                print(f"[RpcPool] SDK reset failed: {e}")
+                self._api = None
+                return
+
+            # Close the old instance AFTER the new one is live so callers
+            # are never left with self._api = None for longer than a moment.
+            if old is not None:
+                try:
+                    if hasattr(old, "close"):
+                        await asyncio.wait_for(old.close(), timeout=10)
+                        print("[RpcPool] Old SDK instance closed cleanly")
+                except Exception as e:
+                    # Non-fatal — GC will eventually collect it
+                    print(f"[RpcPool] Old SDK close error (non-critical): {e}")
+
+    async def _maybe_reset_sdk(self):
+        """Trigger a full SDK reset once enough hard-resets have accumulated."""
         now = time.monotonic()
         self._hard_reset_times = [
             t for t in self._hard_reset_times if now - t < self._sdk_reset_window
@@ -122,13 +188,7 @@ class RpcConnectionPool:
                 f"[RpcPool] {self._sdk_reset_threshold} hard resets "
                 f"in {self._sdk_reset_window}s → resetting SDK"
             )
-            try:
-                self._api = reset_metaapi_client()
-                self._hard_reset_times.clear()
-                print("[RpcPool] MetaApi SDK reset complete")
-            except Exception as e:
-                print(f"[RpcPool] SDK reset failed: {e}")
-                self._api = None
+            await self._reset_sdk_safely()
 
     # =====================================
     # GET ACCOUNT (CACHED)
@@ -137,19 +197,20 @@ class RpcConnectionPool:
         if account_id in self._accounts:
             return self._accounts[account_id]
 
+        stale_api = None
         try:
-            api = await self._get_api()
-            account = await api.metatrader_account_api.get_account(account_id)
+            stale_api = await self._get_api()
+            account = await stale_api.metatrader_account_api.get_account(account_id)
         except Exception as e:
-            # API client may have gone stale — reset it and try once more
-            # before giving up.  This prevents a dead SDK from blocking all
-            # accounts permanently.
+            # API client may have gone stale (WebSocket dropped, token expired).
+            # Reset it once — serialised so parallel failures don't each create
+            # a new SDK instance — then retry before giving up.
             print(
                 f"[RpcPool] get_account failed ({e}), "
                 f"resetting SDK and retrying → {account_id}"
             )
+            await self._reset_sdk_safely(stale_instance=stale_api)
             try:
-                self._api = reset_metaapi_client()
                 account = await self._api.metatrader_account_api.get_account(account_id)
                 print(f"[RpcPool] SDK reset OK — account fetched → {account_id}")
             except Exception as e2:
@@ -171,7 +232,7 @@ class RpcConnectionPool:
         force=False — normal background/poll path: respects cooldown to avoid
                       hammering unreachable brokers.
         """
-        # Check cooldown BEFORE acquiring lock — fast rejection (background only)
+        # Fast rejection before acquiring lock (background path only)
         if not force:
             cooldown_until = self._cooldown_until.get(account_id, 0)
             if time.monotonic() < cooldown_until:
@@ -183,7 +244,8 @@ class RpcConnectionPool:
 
         lock = self._get_account_lock(account_id)
         async with lock:
-            # Re-check cooldown inside lock — background path only
+            # Re-check cooldown inside lock — another coroutine may have
+            # triggered a reset while we were waiting (background path only)
             if not force:
                 cooldown_until = self._cooldown_until.get(account_id, 0)
                 if time.monotonic() < cooldown_until:
@@ -237,14 +299,13 @@ class RpcConnectionPool:
                 self._connections[account_id] = connection
                 self._verified_at[account_id] = time.monotonic()
                 self._last_used[account_id] = time.monotonic()
-                self._failure_count[account_id] = 0
-                # Clear any stale cooldown on successful build
-                self._cooldown_until.pop(account_id, None)
+                self._failure_count.pop(account_id, None)  # reset — don't accumulate
+                self._cooldown_until.pop(account_id, None)  # clear stale cooldown
                 return connection
             except Exception as e:
                 print(f"[RpcPool] Build failed → {account_id}: {e}")
                 if not force:
-                    # Background path: apply long cooldown so unreachable brokers
+                    # Background path: long cooldown so unreachable brokers
                     # aren't hammered.  invalidate() clears this on deploy/undeploy.
                     self._cooldown_until[account_id] = (
                         time.monotonic() + self._build_fail_cooldown
@@ -272,7 +333,7 @@ class RpcConnectionPool:
             return await self._build_connection_inner(account_id)
 
     async def _build_connection_inner(self, account_id: str):
-        self._accounts.pop(account_id, None)
+        self._accounts.pop(account_id, None)   # force fresh fetch
         account = await self.get_account(account_id)
 
         if account.state != "DEPLOYED":
@@ -324,34 +385,33 @@ class RpcConnectionPool:
 
     # =====================================
     # HARD RESET
-    # Must be called while holding the account lock
+    # Must be called while holding the account lock.
     # =====================================
     async def _hard_reset(self, account_id: str, count_toward_sdk_reset: bool = True):
         print(f"[RpcPool] Hard reset → {account_id}")
 
-        connection = self._connections.pop(account_id, None)
-        self._accounts.pop(account_id, None)
-        self._verified_at.pop(account_id, None)
-        self._failure_count[account_id] = 0
-        self._last_used.pop(account_id, None)
+        connection = self._connections.get(account_id)
+
+        # Purge all per-account state first, then set cooldown
+        self._purge_account(account_id)
         self._cooldown_until[account_id] = time.monotonic() + self._cooldown_seconds
 
         if connection:
             await self._close_connection_safely(connection, account_id)
 
         if count_toward_sdk_reset:
-            self._maybe_reset_sdk()
+            await self._maybe_reset_sdk()
 
     # =====================================
-    # INVALIDATE (explicit, e.g. after undeploy)
+    # INVALIDATE (explicit, e.g. after undeploy/redeploy)
     # =====================================
     async def invalidate(self, account_id: str):
         lock = self._get_account_lock(account_id)
         async with lock:
-            await self._hard_reset(account_id, count_toward_sdk_reset=False)
-            # Clear cooldown on explicit invalidate so a redeploy can
-            # connect immediately without waiting 30s
-            self._cooldown_until.pop(account_id, None)
+            connection = self._connections.get(account_id)
+            self._purge_account(account_id)   # full cleanup including cooldown
+            if connection:
+                await self._close_connection_safely(connection, account_id)
         print(f"[RpcPool] Invalidated → {account_id}")
 
     async def invalidate_all(self):

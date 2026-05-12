@@ -33,14 +33,16 @@ class HealthStatus(TypedDict, total=False):
 
 
 class MetaApiTradeListener(ABC):
-    def __init__(self, account_id: int, manager=None):
-        self.account_id = account_id
-        #self._initialized = False
+    def __init__(self, db_account_id: int, metaapi_account_id: str = None, manager=None):
+        # Integer DB primary key — used by the copy engine for DB lookups
+        self.account_id = db_account_id
+        # MetaApi string UUID — used by manager callbacks (mark_disconnected,
+        # connection store) which key everything by MetaApi ID, not DB ID.
+        self.metaapi_account_id = metaapi_account_id or str(db_account_id)
         self._known_positions = set()
         self.manager = manager
-        self._disconnected = False 
+        self._disconnected = False
         self._position_cache = {}  # cache for current SL/TP of positions to detect modifies
-        # self._active = False 
 
     def get_region(self, instance_index: str = None) -> str:
         """Returns region of instance index.
@@ -103,9 +105,11 @@ class MetaApiTradeListener(ABC):
         if self._disconnected:
             return
         self._disconnected = True
-        print(f"🔌 DISCONNECTED {self.account_id}")
+        print(f"🔌 DISCONNECTED {self.metaapi_account_id}")
         if self.manager:
-            await self.manager.mark_disconnected(self.account_id)
+            # Use metaapi_account_id (string) — the manager keys everything
+            # by MetaApi UUID, not the integer DB account_id.
+            await self.manager.mark_disconnected(self.metaapi_account_id)
 
 
     async def on_broker_connection_status_changed(self, instance_index: str, connected: bool):
@@ -583,9 +587,9 @@ class MetaApiTradeListener(ABC):
         if self._disconnected:
             return
         self._disconnected = True
-        print(f"⚠️ STREAM CLOSED {self.account_id}")
+        print(f"⚠️ STREAM CLOSED {self.metaapi_account_id}")
         if self.manager:
-            await self.manager.mark_disconnected(self.account_id)
+            await self.manager.mark_disconnected(self.metaapi_account_id)
 
     async def on_unsubscribe_region(self, region: str):
         """Invoked when account region has been unsubscribed.

@@ -25,8 +25,19 @@ def get_metaapi_client() -> MetaApi:
 
 
 def reset_metaapi_client() -> MetaApi:
-    """Force a fresh MetaApi client — call this when the SDK has zombie state."""
+    """
+    Replace the global MetaApi singleton with a fresh instance.
+
+    Callers are responsible for closing the *old* instance before or after
+    calling this function — the pool's _reset_sdk_safely() does this
+    properly so that WebSocket threads and connections are freed rather
+    than orphaned.
+    """
     global _metaapi_client
-    print("🔄 Resetting MetaApi client singleton...")
-    _metaapi_client = None
-    return get_metaapi_client()
+
+    if not API_TOKEN:
+        raise ValueError("❌ ACCESS_TOKEN is not set in environment")
+
+    print("🔄 Creating fresh MetaApi client...")
+    _metaapi_client = MetaApi(API_TOKEN)
+    return _metaapi_client
