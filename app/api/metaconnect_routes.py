@@ -865,6 +865,9 @@ async def quick_trade(
         if not account.metaapi_account_id:
             raise HTTPException(status_code=400, detail="Account not connected to MetaAPI")
 
+        if account.state.lower() != "deployed":
+            raise HTTPException(status_code=400, detail="Account is not deployed")
+
         if account.connection_status != "connected":
             raise HTTPException(status_code=400, detail="Account is not connected")
 
@@ -916,9 +919,9 @@ async def quick_trade(
         # SL/TP PROCESSING
         # =========================
         try:
-            # ✅ Use shared pool directly — no private method access
+            # force=True: user-initiated trade — bypass cooldown, never lock them out
             print(f"[Route] rpc_pool id: {id(rpc_pool)}")
-            connection = await rpc_pool.get_connection(account.metaapi_account_id)
+            connection = await rpc_pool.get_connection(account.metaapi_account_id, force=True)
 
             symbol_spec = await connection.get_symbol_specification(symbol)
             symbol_price = await connection.get_symbol_price(symbol)

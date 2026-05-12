@@ -21,7 +21,8 @@ class RpcConnectionPool:
 
         # Cooldown: after a hard reset, don't immediately retry
         self._cooldown_until: Dict[str, float] = {}
-        self._cooldown_seconds = 60            # longer cooldown after failure (was 30s)
+        self._cooldown_seconds = 60            # after watchdog hard-reset
+        self._build_fail_cooldown = 300        # after build failure (5 min — broker may be offline)
 
         self._verify_ttl = 10
         self._max_failures = 3
@@ -135,28 +136,43 @@ class RpcConnectionPool:
     async def get_account(self, account_id: str):
         if account_id in self._accounts:
             return self._accounts[account_id]
-        api = await self._get_api()
-        account = await api.metatrader_account_api.get_account(account_id)
+
+        try:
+            api = await self._get_api()
+            account = await api.metatrader_account_api.get_account(account_id)
+        except Exception as e:
+            # API client may have gone stale — reset it and try once more
+            # before giving up.  This prevents a dead SDK from blocking all
+            # accounts permanently.
+            print(
+                f"[RpcPool] get_account failed ({e}), "
+                f"resetting SDK and retrying → {account_id}"
+            )
+            try:
+                self._api = reset_metaapi_client()
+                account = await self._api.metatrader_account_api.get_account(account_id)
+                print(f"[RpcPool] SDK reset OK — account fetched → {account_id}")
+            except Exception as e2:
+                print(f"[RpcPool] get_account retry failed → {account_id}: {e2}")
+                raise e2
+
         self._accounts[account_id] = account
         return account
 
     # =====================================
     # GET CONNECTION
     # =====================================
-    async def get_connection(self, account_id: str):
-        # Check cooldown BEFORE acquiring lock — fast rejection
-        cooldown_until = self._cooldown_until.get(account_id, 0)
-        if time.monotonic() < cooldown_until:
-            remaining = round(cooldown_until - time.monotonic(), 1)
-            raise Exception(
-                f"[RpcPool] Account {account_id} in cooldown "
-                f"for {remaining}s after reset"
-            )
-
-        lock = self._get_account_lock(account_id)
-        async with lock:
-            # Re-check cooldown inside lock (another coroutine may have
-            # triggered a reset while we were waiting for the lock)
+    async def get_connection(self, account_id: str, force: bool = False):
+        """
+        force=True  — bypass cooldown entirely (use for explicit user actions
+                      like placing a trade).  A fresh build is always attempted
+                      and no new cooldown is imposed on failure, so the user can
+                      retry immediately without being locked out.
+        force=False — normal background/poll path: respects cooldown to avoid
+                      hammering unreachable brokers.
+        """
+        # Check cooldown BEFORE acquiring lock — fast rejection (background only)
+        if not force:
             cooldown_until = self._cooldown_until.get(account_id, 0)
             if time.monotonic() < cooldown_until:
                 remaining = round(cooldown_until - time.monotonic(), 1)
@@ -164,6 +180,18 @@ class RpcConnectionPool:
                     f"[RpcPool] Account {account_id} in cooldown "
                     f"for {remaining}s after reset"
                 )
+
+        lock = self._get_account_lock(account_id)
+        async with lock:
+            # Re-check cooldown inside lock — background path only
+            if not force:
+                cooldown_until = self._cooldown_until.get(account_id, 0)
+                if time.monotonic() < cooldown_until:
+                    remaining = round(cooldown_until - time.monotonic(), 1)
+                    raise Exception(
+                        f"[RpcPool] Account {account_id} in cooldown "
+                        f"for {remaining}s after reset"
+                    )
 
             connection = self._connections.get(account_id)
             last_verified = self._verified_at.get(account_id, 0)
@@ -210,13 +238,18 @@ class RpcConnectionPool:
                 self._verified_at[account_id] = time.monotonic()
                 self._last_used[account_id] = time.monotonic()
                 self._failure_count[account_id] = 0
+                # Clear any stale cooldown on successful build
+                self._cooldown_until.pop(account_id, None)
                 return connection
             except Exception as e:
                 print(f"[RpcPool] Build failed → {account_id}: {e}")
-                # Apply cooldown so callers stop hammering a broken account
-                self._cooldown_until[account_id] = (
-                    time.monotonic() + self._cooldown_seconds
-                )
+                if not force:
+                    # Background path: apply long cooldown so unreachable brokers
+                    # aren't hammered.  invalidate() clears this on deploy/undeploy.
+                    self._cooldown_until[account_id] = (
+                        time.monotonic() + self._build_fail_cooldown
+                    )
+                # force=True (user action): no cooldown imposed — user can retry
                 raise
 
     # =====================================
@@ -243,9 +276,10 @@ class RpcConnectionPool:
         account = await self.get_account(account_id)
 
         if account.state != "DEPLOYED":
-            print(f"[RpcPool] Deploying → {account_id}")
-            await account.deploy()
-            await asyncio.sleep(5)
+            raise Exception(
+                f"[RpcPool] Account {account_id} is not deployed "
+                f"(state: {account.state}) — deploy it first"
+            )
 
         # Wait up to 8s for broker-connected status.  Some brokers report
         # DISCONNECTED even when RPC works, so we fall through and let
