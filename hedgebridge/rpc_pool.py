@@ -36,7 +36,10 @@ class RpcConnectionPool:
         self._verify_ttl = 10
         self._max_failures = 3
         self._watchdog_interval = 120
-        self._idle_evict_seconds = 5 * 60
+        # No idle eviction — connections are kept alive via the watchdog keepalive
+        # probe below.  Eviction-on-idle caused position/metric blackouts when the
+        # rebuild took up to ~53 s (broker-wait + connect + sync).  Accounts are
+        # only removed on explicit invalidate() or after repeated health failures.
         self._watchdog_task: Optional[asyncio.Task] = None
 
         self._hard_reset_times: list = []
@@ -84,26 +87,13 @@ class RpcConnectionPool:
         now = time.monotonic()
 
         for account_id in account_ids:
-            # ─── IDLE EVICTION ───────────────────────────────────────────
-            # Close and fully purge connections nobody has used for a while.
-            # No cooldown is set — the account was healthy, just idle; it
-            # should reconnect immediately when next requested.
-            last_used = self._last_used.get(account_id, 0)
-            idle_seconds = now - last_used
-
-            if idle_seconds > self._idle_evict_seconds:
-                print(
-                    f"[RpcPool] Evicting idle connection "
-                    f"({idle_seconds / 60:.1f} min idle) → {account_id}"
-                )
-                async with self._get_account_lock(account_id):
-                    connection = self._connections.get(account_id)
-                    if connection:
-                        await self._close_connection_safely(connection, account_id)
-                    self._purge_account(account_id)   # full cleanup, no cooldown
-                continue
-
-            # ─── NORMAL HEALTH PROBE ─────────────────────────────────────
+            # ─── KEEPALIVE HEALTH PROBE ──────────────────────────────────
+            # Probe every connection regardless of how long it has been idle.
+            # A successful probe also stamps _last_used so the connection is
+            # treated as "recently active" for verify_ttl purposes and any
+            # future tooling that inspects idle time.
+            # Connections are NEVER evicted for idleness — they are only
+            # removed on explicit invalidate() or after _max_failures probes.
             try:
                 connection = self._connections.get(account_id)
                 if not connection:
@@ -113,6 +103,7 @@ class RpcConnectionPool:
                 )
                 self._failure_count[account_id] = 0
                 self._verified_at[account_id] = now
+                self._last_used[account_id] = now   # keepalive: reset idle clock
                 print(f"[RpcPool] Watchdog OK → {account_id}")
 
             except Exception as e:
@@ -306,8 +297,16 @@ class RpcConnectionPool:
                 self._failure_count.pop(account_id, None)  # reset — don't accumulate
                 self._cooldown_until.pop(account_id, None)  # clear stale cooldown
                 return connection
-            except Exception as e:
-                print(f"[RpcPool] Build failed → {account_id}: {e}")
+            except BaseException as e:
+                # Catches both Exception and CancelledError (BaseException).
+                # CancelledError is raised when the caller's outer wait_for
+                # deadline fires (e.g. the positions route's 20s timeout).
+                # Without this, CancelledError bypasses the cooldown block and
+                # the route retries every 20 s forever — the infinite loop.
+                print(
+                    f"[RpcPool] Build failed → {account_id}: "
+                    f"{type(e).__name__}: {e}"
+                )
                 if not force:
                     # Background path: long cooldown so unreachable brokers
                     # aren't hammered.  invalidate() clears this on deploy/undeploy.
@@ -380,6 +379,11 @@ class RpcConnectionPool:
             raise Exception(
                 f"[RpcPool] connection.connect() timed out → {account_id}"
             )
+        except BaseException:
+            # CancelledError from outer deadline — connection.connect() may have
+            # started a WebSocket handshake; close it so it isn't orphaned.
+            await self._close_connection_safely(connection, account_id)
+            raise
 
         try:
             await asyncio.wait_for(connection.wait_synchronized(), timeout=30)
@@ -389,6 +393,10 @@ class RpcConnectionPool:
                 f"[RpcPool] wait_synchronized timed out → {account_id}. "
                 f"Broker may not be reachable."
             )
+        except BaseException:
+            # CancelledError — connected but sync never completed; close cleanly.
+            await self._close_connection_safely(connection, account_id)
+            raise
 
         print(f"[RpcPool] Connection ready → {account_id}")
         return connection
