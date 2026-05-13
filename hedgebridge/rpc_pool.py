@@ -31,7 +31,16 @@ class RpcConnectionPool:
 
         # Cooldown tuning
         self._cooldown_seconds = 60        # after watchdog hard-reset
-        self._build_fail_cooldown = 300    # after build failure (5 min)
+        self._build_fail_cooldown = 300    # after genuine build failure (broker refused/timed out)
+        self._cancel_cooldown = 15         # after CancelledError (route timeout, NOT broker down)
+        #
+        # Why two separate cooldowns:
+        # CancelledError means the HTTP route's outer wait_for deadline fired (e.g. the
+        # /mt5/accounts fetch_metrics 6s timeout).  The broker may be perfectly reachable
+        # — MetaApi often reconnects within 1-5 s.  Applying the 300s broker-down cooldown
+        # here locks every account out for 5 min after every MetaApi blip, which is what
+        # caused the dashboard blackout in production.  A 15s pause is enough to stop a
+        # retry storm without causing visible downtime.
 
         self._verify_ttl = 10
         self._max_failures = 3
@@ -297,19 +306,31 @@ class RpcConnectionPool:
                 self._failure_count.pop(account_id, None)  # reset — don't accumulate
                 self._cooldown_until.pop(account_id, None)  # clear stale cooldown
                 return connection
-            except BaseException as e:
-                # Catches both Exception and CancelledError (BaseException).
-                # CancelledError is raised when the caller's outer wait_for
-                # deadline fires (e.g. the positions route's 20s timeout).
-                # Without this, CancelledError bypasses the cooldown block and
-                # the route retries every 20 s forever — the infinite loop.
+            except asyncio.CancelledError:
+                # The caller's outer wait_for deadline fired (e.g. fetch_metrics
+                # 6s timeout, positions route 20s timeout).  This is a route
+                # timeout, NOT a broker failure — MetaApi often reconnects in
+                # under 5 seconds.  Use a short cooldown to stop retry storms
+                # without triggering the 5-minute broker-down lockout.
+                print(
+                    f"[RpcPool] Build cancelled (route timeout) → {account_id}: "
+                    f"cooldown {self._cancel_cooldown}s"
+                )
+                if not force:
+                    self._cooldown_until[account_id] = (
+                        time.monotonic() + self._cancel_cooldown
+                    )
+                raise
+            except Exception as e:
+                # Genuine build failure: broker refused connection, connect() or
+                # wait_synchronized() timed out internally, account not deployed, etc.
+                # Long cooldown so unreachable brokers are not hammered.
+                # invalidate() clears this on deploy/undeploy.
                 print(
                     f"[RpcPool] Build failed → {account_id}: "
                     f"{type(e).__name__}: {e}"
                 )
                 if not force:
-                    # Background path: long cooldown so unreachable brokers
-                    # aren't hammered.  invalidate() clears this on deploy/undeploy.
                     self._cooldown_until[account_id] = (
                         time.monotonic() + self._build_fail_cooldown
                     )
