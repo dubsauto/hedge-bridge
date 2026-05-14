@@ -284,19 +284,29 @@ class RpcConnectionPool:
                     count = self._failure_count.get(account_id, 0) + 1
                     self._failure_count[account_id] = count
                     print(
-                        f"[RpcPool] Stale connection "
+                        f"[RpcPool] Probe fail "
                         f"[{count}/{self._max_failures}] → {account_id}"
                     )
+
+                    if count < self._max_failures:
+                        # Probe timed out but below the failure threshold.
+                        # The SDK is often slow under load (subscription manager
+                        # backlog, out-of-order packets) — a single timeout does
+                        # NOT mean the connection is dead.  Return it optimistically
+                        # and re-probe on the next get_connection() call (_verified_at
+                        # is not updated so the probe fires again immediately).
+                        self._last_used[account_id] = now
+                        return connection
+
+                    # Reached failure limit → close and hard reset
                     await self._close_connection_safely(connection, account_id)
                     self._connections.pop(account_id, None)
                     self._verified_at.pop(account_id, None)
-
-                    if count >= self._max_failures:
-                        await self._hard_reset(account_id)
-                        raise Exception(
-                            f"[RpcPool] {account_id} hard reset after "
-                            f"{count} failures, retry after cooldown"
-                        )
+                    await self._hard_reset(account_id)
+                    raise Exception(
+                        f"[RpcPool] {account_id} hard reset after "
+                        f"{count} consecutive probe failures, retry after cooldown"
+                    )
 
             # ── force=True: build inline (must not fail silently) ──────────
             if force:

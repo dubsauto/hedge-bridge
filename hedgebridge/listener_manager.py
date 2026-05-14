@@ -13,9 +13,9 @@ import time
 
 GRACE_PERIOD = 60
 KEEPALIVE_INTERVAL = 45
-SYNC_TIMEOUT = 30      # per attempt; 2 attempts = 60s max before reconnect
-                       # (was 60 × 3 = 180s — caused 15-min outage)
-MAX_SYNC_ATTEMPTS = 2  # 2 × 30s = 60s before "dead" (was 3 × 60s = 180s)
+SYNC_TIMEOUT = 15      # per attempt; 2 attempts = 30s max before reconnect
+MAX_SYNC_ATTEMPTS = 2  # 2 × 15s = 30s before reconnect (sync failures are MetaAPI-side,
+                       # not account failures — reconnect_attempts is reset on sync fail)
 DEPLOY_WAIT = 8
 CONNECT_TIMEOUT = 15   # connection.connect() hard deadline
 CLOSE_TIMEOUT = 10     # connection.close() hard deadline
@@ -660,12 +660,14 @@ class ListenerManager:
 
                 await asyncio.sleep(5)
 
-            # All sync attempts exhausted — treat as dead and trigger reconnect
+            # All sync attempts exhausted — treat as dead and trigger reconnect.
+            # sync_failed=True resets the reconnect counter so these timeouts
+            # (MetaAPI server-side) don't push the account toward nuclear reset.
             print(
                 f"⚠️ Sync never completed after {MAX_SYNC_ATTEMPTS} attempts → "
                 f"{account_id}, triggering reconnect"
             )
-            await self.mark_disconnected(account_id)
+            await self.mark_disconnected(account_id, sync_failed=True)
 
         finally:
             # Always remove the done task from the dict so it doesn't
@@ -735,7 +737,7 @@ class ListenerManager:
     # =====================================
     # MARK DISCONNECTED
     # =====================================
-    async def mark_disconnected(self, account_id: str):
+    async def mark_disconnected(self, account_id: str, sync_failed: bool = False):
         self._record_disconnect(account_id)
 
         async with self._lock:
@@ -769,6 +771,12 @@ class ListenerManager:
         print(f"♻️ Marked for reconnection → {account_id}")
 
         if not self._global_outage:
+            if sync_failed:
+                # Sync timeouts are MetaAPI server-side (out-of-order packets,
+                # subscription manager overload) — not a dead account.  Reset
+                # the per-account reconnect counter so these failures never
+                # accumulate toward the nuclear-reset limit.
+                self._reconnect_attempts.pop(account_id, None)
             self._reconnect_queue.put_nowait(account_id)
 
 
