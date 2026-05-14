@@ -20,6 +20,7 @@ from typing import List, Optional
 
 from typing_extensions import TypedDict
 import asyncio
+import time
 
 class HealthStatus(TypedDict, total=False):
     """Server-side application health status."""
@@ -44,6 +45,13 @@ class MetaApiTradeListener(ABC):
         self.manager = manager
         self._disconnected = False
         self._position_cache = {}  # cache for current SL/TP of positions to detect modifies
+        # Monotonic timestamp of the last event received from MetaAPI.
+        # 0.0 means no event yet. Used by keepalive to detect silent dead subscriptions.
+        self._last_event_at: float = 0.0
+
+    def _touch(self):
+        """Record that a live event just arrived from MetaAPI."""
+        self._last_event_at = time.monotonic()
 
     def get_region(self, instance_index: str = None) -> str:
         """Returns region of instance index.
@@ -79,8 +87,7 @@ class MetaApiTradeListener(ABC):
         Returns:
             A coroutine which resolves when the asynchronous event is processed.
         """
-        # self._active = True
-        pass
+        self._touch()
 
     async def on_health_status(self, instance_index: str, status: HealthStatus):
         """Invoked when a server-side application health status is received from MetaApi.
@@ -92,7 +99,9 @@ class MetaApiTradeListener(ABC):
         Returns:
             A coroutine which resolves when the asynchronous event is processed.
         """
-        pass
+        # MetaAPI sends periodic health pings — use them as a heartbeat to detect
+        # dead subscription managers that stop events without firing on_disconnected.
+        self._touch()
 
     async def on_disconnected(self, instance_index: str):
         """Invoked when connection to MetaTrader terminal terminated.
@@ -159,11 +168,12 @@ class MetaApiTradeListener(ABC):
         Returns:
             A coroutine which resolves when the asynchronous event is processed.
         """
-        pass
+        self._touch()
 
     async def on_positions_replaced(self, instance_index: str, positions: List[MetatraderPosition]):
         """Seed _known_positions from DB on reconnect so already-copied trades
         are not re-fired as new through on_positions_updated."""
+        self._touch()
         db = SessionLocal()
         try:
             rows = (
@@ -199,6 +209,7 @@ class MetaApiTradeListener(ABC):
         pass
 
     async def on_positions_updated(self, instance_index, positions, removed_positions_ids):
+        self._touch()
         tasks = []
 
         try:

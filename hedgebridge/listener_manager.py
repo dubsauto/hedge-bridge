@@ -13,6 +13,10 @@ import time
 
 GRACE_PERIOD = 60
 KEEPALIVE_INTERVAL = 45
+# If a synced listener receives NO events for this long, the MetaAPI subscription
+# manager has likely dropped its subscriptions silently (no on_disconnected fires).
+# Force a reconnect to restore event delivery.
+EVENT_SILENCE_THRESHOLD = 120
 SYNC_TIMEOUT = 15      # per attempt; 2 attempts = 30s max before reconnect
 MAX_SYNC_ATTEMPTS = 2  # 2 × 15s = 30s before reconnect (sync failures are MetaAPI-side,
                        # not account failures — reconnect_attempts is reset on sync fail)
@@ -255,6 +259,21 @@ class ListenerManager:
                         if status is not None and not status.get("connected", False):
                             print(f"💀 Keepalive detected dead connection → {account_id}")
                             await self.mark_disconnected(account_id)
+                            continue
+
+                        # Event-silence check: health_monitor says "connected" but
+                        # MetaAPI subscription manager may have dropped subscriptions
+                        # internally without firing on_disconnected. Detect this by
+                        # checking how long it has been since any callback fired.
+                        listener = self._listeners.get(account_id)
+                        if listener and listener._last_event_at > 0:
+                            silence = now - listener._last_event_at
+                            if silence > EVENT_SILENCE_THRESHOLD:
+                                print(
+                                    f"🔇 Event silence {silence:.0f}s → {account_id} "
+                                    f"(subscription manager likely dead), forcing reconnect"
+                                )
+                                await self.mark_disconnected(account_id)
 
                     except Exception as e:
                         print(f"⚠️ Keepalive check error for {account_id}: {e}")
@@ -519,6 +538,18 @@ class ListenerManager:
                 if status is not None and not status.get("connected", False):
                     print(f"💀 Dead connection detected → {account_id}")
                     await self.mark_disconnected(account_id)
+                    continue
+
+                # Event-silence check (same logic as keepalive, catches it faster)
+                listener = self._listeners.get(account_id)
+                if listener and listener._last_event_at > 0:
+                    silence = now - listener._last_event_at
+                    if silence > EVENT_SILENCE_THRESHOLD:
+                        print(
+                            f"🔇 Event silence {silence:.0f}s → {account_id} "
+                            f"(subscription manager likely dead), forcing reconnect"
+                        )
+                        await self.mark_disconnected(account_id)
 
             except Exception:
                 pass
@@ -642,6 +673,11 @@ class ListenerManager:
                     self._set_listener_active(account_id, True)
                     self._reconnect_attempts.pop(account_id, None)
                     self._disconnect_times.pop(account_id, None)
+                    # Seed the event-silence clock so the keepalive silence check
+                    # activates even if MetaAPI never fires a callback after sync.
+                    listener = self._listeners.get(account_id)
+                    if listener and listener._last_event_at == 0.0:
+                        listener._last_event_at = time.monotonic()
                     return
 
                 except asyncio.CancelledError:
@@ -668,6 +704,7 @@ class ListenerManager:
                 f"{account_id}, triggering reconnect"
             )
             await self.mark_disconnected(account_id, sync_failed=True)
+            return
 
         finally:
             # Always remove the done task from the dict so it doesn't
