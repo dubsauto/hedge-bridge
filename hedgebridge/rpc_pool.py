@@ -31,16 +31,7 @@ class RpcConnectionPool:
 
         # Cooldown tuning
         self._cooldown_seconds = 60        # after watchdog hard-reset
-        self._build_fail_cooldown = 300    # after genuine build failure (broker refused/timed out)
-        self._cancel_cooldown = 15         # after CancelledError (route timeout, NOT broker down)
-        #
-        # Why two separate cooldowns:
-        # CancelledError means the HTTP route's outer wait_for deadline fired (e.g. the
-        # /mt5/accounts fetch_metrics 6s timeout).  The broker may be perfectly reachable
-        # — MetaApi often reconnects within 1-5 s.  Applying the 300s broker-down cooldown
-        # here locks every account out for 5 min after every MetaApi blip, which is what
-        # caused the dashboard blackout in production.  A 15s pause is enough to stop a
-        # retry storm without causing visible downtime.
+        self._build_fail_cooldown = 20     # after build failure — short so network outages recover fast
 
         self._verify_ttl = 10
         self._max_failures = 3
@@ -57,6 +48,11 @@ class RpcConnectionPool:
 
         # Limit simultaneous connection builds to avoid overloading 0.5 CPU
         self._build_semaphore = asyncio.Semaphore(2)
+
+        # Background build tasks — one per account.  Routes never wait for a
+        # build; they fail-fast so HTTP responses are not blocked for 45s+.
+        # The task stores the finished connection when done.
+        self._build_tasks: Dict[str, asyncio.Task] = {}
 
     # =====================================
     # HELPERS
@@ -170,7 +166,9 @@ class RpcConnectionPool:
             if old is not None:
                 try:
                     if hasattr(old, "close"):
-                        await asyncio.wait_for(old.close(), timeout=10)
+                        result = old.close()
+                        if asyncio.iscoroutine(result):
+                            await asyncio.wait_for(result, timeout=10)
                         print("[RpcPool] Old SDK instance closed cleanly")
                 except Exception as e:
                     # Non-fatal — GC will eventually collect it
@@ -229,14 +227,19 @@ class RpcConnectionPool:
     # =====================================
     async def get_connection(self, account_id: str, force: bool = False):
         """
-        force=True  — bypass cooldown entirely (use for explicit user actions
-                      like placing a trade).  A fresh build is always attempted
-                      and no new cooldown is imposed on failure, so the user can
-                      retry immediately without being locked out.
-        force=False — normal background/poll path: respects cooldown to avoid
-                      hammering unreachable brokers.
+        Returns an already-built, verified RPC connection immediately.
+
+        force=False (default / all background/poll callers):
+            Fails fast if no connection is ready.  A background build task is
+            spawned automatically so the next poll will find the connection
+            ready.  Routes never block waiting for a build — that was the root
+            cause of the 20-second response times and the endless cancel loop.
+
+        force=True (explicit user action like placing a trade):
+            Builds synchronously in the caller's context.  No cooldown is
+            imposed on failure so the user can retry immediately.
         """
-        # Fast rejection before acquiring lock (background path only)
+        # Fast cooldown check — avoid taking the lock on the hot rejection path
         if not force:
             cooldown_until = self._cooldown_until.get(account_id, 0)
             if time.monotonic() < cooldown_until:
@@ -248,8 +251,7 @@ class RpcConnectionPool:
 
         lock = self._get_account_lock(account_id)
         async with lock:
-            # Re-check cooldown inside lock — another coroutine may have
-            # triggered a reset while we were waiting (background path only)
+            # Re-check cooldown inside lock (another coroutine may have reset)
             if not force:
                 cooldown_until = self._cooldown_until.get(account_id, 0)
                 if time.monotonic() < cooldown_until:
@@ -260,10 +262,10 @@ class RpcConnectionPool:
                     )
 
             connection = self._connections.get(account_id)
-            last_verified = self._verified_at.get(account_id, 0)
             now = time.monotonic()
+            last_verified = self._verified_at.get(account_id, 0)
 
-            # Recently verified — stamp last_used and return immediately
+            # Recently verified — return immediately without a probe call
             if connection and (now - last_verified) < self._verify_ttl:
                 self._last_used[account_id] = now
                 return connection
@@ -285,7 +287,6 @@ class RpcConnectionPool:
                         f"[RpcPool] Stale connection "
                         f"[{count}/{self._max_failures}] → {account_id}"
                     )
-
                     await self._close_connection_safely(connection, account_id)
                     self._connections.pop(account_id, None)
                     self._verified_at.pop(account_id, None)
@@ -297,45 +298,83 @@ class RpcConnectionPool:
                             f"{count} failures, retry after cooldown"
                         )
 
-            # Build fresh connection
-            try:
-                connection = await self._build_connection(account_id)
+            # ── force=True: build inline (must not fail silently) ──────────
+            if force:
+                try:
+                    connection = await self._build_connection(account_id)
+                    self._connections[account_id] = connection
+                    self._verified_at[account_id] = time.monotonic()
+                    self._last_used[account_id] = time.monotonic()
+                    self._failure_count.pop(account_id, None)
+                    self._cooldown_until.pop(account_id, None)
+                    return connection
+                except Exception as e:
+                    raise
+
+            # ── Non-force: spawn background build, fail fast ───────────────
+            # The build takes 15-45s (broker wait + connect + wait_synchronized).
+            # If the route's wait_for was allowed to cancel it mid-connect, the
+            # connection gets closed, a 15s cooldown fires, and the next request
+            # restarts the same loop — the connection can NEVER be established.
+            # Instead we return immediately with an error and let the background
+            # task finish the build.  The next poll (5-6s later) will find the
+            # connection ready.
+            existing = self._build_tasks.get(account_id)
+            if existing and not existing.done():
+                raise Exception(
+                    f"[RpcPool] Account {account_id} building in background — "
+                    f"connection will be ready shortly"
+                )
+
+            # Previous task finished (success or failure already handled)
+            if existing:
+                self._build_tasks.pop(account_id, None)
+
+            task = asyncio.create_task(self._background_build(account_id))
+            self._build_tasks[account_id] = task
+            raise Exception(
+                f"[RpcPool] Account {account_id} build started in background — "
+                f"retry in a few seconds"
+            )
+
+    # =====================================
+    # BACKGROUND BUILD
+    # =====================================
+    async def _background_build(self, account_id: str):
+        """
+        Build an RPC connection in a dedicated asyncio.Task so no HTTP route
+        deadline can cancel it mid-connect.  On success the connection is
+        stored so the next get_connection() call returns it immediately.
+        On failure a cooldown is set just like an inline build failure.
+        """
+        print(f"[RpcPool] Background build starting → {account_id}")
+        try:
+            async with self._build_semaphore:
+                connection = await self._build_connection_inner(account_id)
+
+            async with self._get_account_lock(account_id):
                 self._connections[account_id] = connection
                 self._verified_at[account_id] = time.monotonic()
                 self._last_used[account_id] = time.monotonic()
-                self._failure_count.pop(account_id, None)  # reset — don't accumulate
-                self._cooldown_until.pop(account_id, None)  # clear stale cooldown
-                return connection
-            except asyncio.CancelledError:
-                # The caller's outer wait_for deadline fired (e.g. fetch_metrics
-                # 6s timeout, positions route 20s timeout).  This is a route
-                # timeout, NOT a broker failure — MetaApi often reconnects in
-                # under 5 seconds.  Use a short cooldown to stop retry storms
-                # without triggering the 5-minute broker-down lockout.
-                print(
-                    f"[RpcPool] Build cancelled (route timeout) → {account_id}: "
-                    f"cooldown {self._cancel_cooldown}s"
+                self._failure_count.pop(account_id, None)
+                self._cooldown_until.pop(account_id, None)
+
+            print(f"[RpcPool] Background build complete → {account_id}")
+
+        except asyncio.CancelledError:
+            # Cancelled by invalidate() or hard_reset() — not a broker failure
+            print(f"[RpcPool] Background build cancelled → {account_id}")
+            raise
+
+        except Exception as e:
+            print(f"[RpcPool] Background build failed → {account_id}: {e}")
+            async with self._get_account_lock(account_id):
+                self._cooldown_until[account_id] = (
+                    time.monotonic() + self._build_fail_cooldown
                 )
-                if not force:
-                    self._cooldown_until[account_id] = (
-                        time.monotonic() + self._cancel_cooldown
-                    )
-                raise
-            except Exception as e:
-                # Genuine build failure: broker refused connection, connect() or
-                # wait_synchronized() timed out internally, account not deployed, etc.
-                # Long cooldown so unreachable brokers are not hammered.
-                # invalidate() clears this on deploy/undeploy.
-                print(
-                    f"[RpcPool] Build failed → {account_id}: "
-                    f"{type(e).__name__}: {e}"
-                )
-                if not force:
-                    self._cooldown_until[account_id] = (
-                        time.monotonic() + self._build_fail_cooldown
-                    )
-                # force=True (user action): no cooldown imposed — user can retry
-                raise
+
+        finally:
+            self._build_tasks.pop(account_id, None)
 
     # =====================================
     # CLOSE SAFELY
@@ -429,6 +468,11 @@ class RpcConnectionPool:
     async def _hard_reset(self, account_id: str, count_toward_sdk_reset: bool = True):
         print(f"[RpcPool] Hard reset → {account_id}")
 
+        # Stop any background build so it doesn't store a connection over the reset
+        task = self._build_tasks.pop(account_id, None)
+        if task and not task.done():
+            task.cancel()
+
         connection = self._connections.get(account_id)
 
         # Purge all per-account state first, then set cooldown
@@ -447,6 +491,12 @@ class RpcConnectionPool:
     async def invalidate(self, account_id: str):
         lock = self._get_account_lock(account_id)
         async with lock:
+            # Stop background build before purging so it can't race-store a
+            # connection after we've cleared the slot
+            task = self._build_tasks.pop(account_id, None)
+            if task and not task.done():
+                task.cancel()
+
             connection = self._connections.get(account_id)
             self._purge_account(account_id)   # full cleanup including cooldown
             if connection:
@@ -457,6 +507,24 @@ class RpcConnectionPool:
         account_ids = list(self._connections.keys())
         for account_id in account_ids:
             await self.invalidate(account_id)
+
+    def clear_cooldowns(self):
+        """
+        Drop all build-fail cooldowns immediately.
+
+        Called by listener_manager after a global outage recovery so that
+        the rpc_pool can rebuild connections right away instead of waiting
+        up to _build_fail_cooldown seconds after the network returns.
+        Accounts with active connections are unaffected.
+        """
+        cleared = [
+            acc_id for acc_id, until in list(self._cooldown_until.items())
+            if until > time.monotonic() and acc_id not in self._connections
+        ]
+        for acc_id in cleared:
+            self._cooldown_until.pop(acc_id, None)
+        if cleared:
+            print(f"[RpcPool] Cleared cooldowns for {len(cleared)} account(s) after outage recovery")
 
 
 rpc_pool = RpcConnectionPool()

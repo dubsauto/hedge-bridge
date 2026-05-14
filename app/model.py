@@ -374,6 +374,36 @@ class TradingHubState(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# =========================
+# TRACKED POSITIONS (safety net)
+# =========================
+class TrackedPosition(Base):
+    """
+    Written by positions_tracker.py the first time it sees a master position.
+    Used to enforce the replication window: if all slaves don't have a
+    CopyTradeLink within REPLICATION_WINDOW seconds, the tracker closes all.
+    """
+    __tablename__ = "tracked_positions"
+
+    id = Column(Integer, primary_key=True)
+    master_account_id = Column(
+        Integer,
+        ForeignKey("trading_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    master_ticket = Column(String(64), nullable=False)
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    closed_by_tracker = Column(Boolean, default=False)
+    intervention_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "master_account_id", "master_ticket", name="uniq_tracked_pos"
+        ),
+    )
+
+
 class CyclePhase(Base):
     """
     One row per phase, written (or re-written) whenever the user hits

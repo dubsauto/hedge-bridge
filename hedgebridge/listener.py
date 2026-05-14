@@ -1,6 +1,7 @@
 #hedgebridge/listener.py
 from hedgebridge.copy_engine import copy_engine
 from app.database import SessionLocal
+from app.model import CopyTradeLink
 from hedgebridge.models import (
     MetatraderPosition,
     MetatraderAccountInformation,
@@ -161,17 +162,31 @@ class MetaApiTradeListener(ABC):
         pass
 
     async def on_positions_replaced(self, instance_index: str, positions: List[MetatraderPosition]):
-        """Invoked when the positions are replaced as a result of initial terminal state synchronization. This method
-        will be invoked only if server thinks the data was updated, otherwise invocation can be skipped.
+        """Seed _known_positions from DB on reconnect so already-copied trades
+        are not re-fired as new through on_positions_updated."""
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(CopyTradeLink.master_ticket)
+                .filter(
+                    CopyTradeLink.master_account_id == self.account_id,
+                    CopyTradeLink.status == "open",
+                )
+                .distinct()
+                .all()
+            )
+            for (ticket,) in rows:
+                self._known_positions.add(str(ticket))
+        finally:
+            db.close()
 
-        Args:
-            instance_index: Index of an account instance connected.
-            positions: Updated array of positions.
-
-        Returns:
-            A coroutine which resolves when the asynchronous event is processed.
-        """
-        pass
+        # Populate SL/TP cache for all live positions (needed for modify detection)
+        for position in positions:
+            ticket = str(position["id"])
+            self._position_cache[ticket] = {
+                "sl": position.get("stopLoss"),
+                "tp": position.get("takeProfit"),
+            }
 
     async def on_positions_synchronized(self, instance_index: str, synchronization_id: str):
         """Invoked when position synchronization finished to indicate progress of an initial terminal state
@@ -197,12 +212,31 @@ class MetaApiTradeListener(ABC):
                 # NEW TRADE
                 # =========================
                 if ticket not in self._known_positions:
-                    self._known_positions.add(ticket)
+                    # Before copying, check if this position was already copied in a
+                    # previous session.  on_positions_replaced seeds _known_positions
+                    # from DB, but MetaAPI sometimes sends a delta sync on reconnect
+                    # and skips positions_replaced entirely.  Without this guard the
+                    # engine would treat every live position as a brand-new trade on
+                    # reconnect, create duplicate copies, and corrupt close tracking.
+                    db = SessionLocal()
+                    try:
+                        already_copied = db.query(CopyTradeLink).filter(
+                            CopyTradeLink.master_account_id == self.account_id,
+                            CopyTradeLink.master_ticket == ticket,
+                            CopyTradeLink.status == "open",
+                        ).first()
+                    finally:
+                        db.close()
 
+                    self._known_positions.add(ticket)
                     self._position_cache[ticket] = {
                         "sl": current_sl,
-                        "tp": current_tp
+                        "tp": current_tp,
                     }
+
+                    if already_copied:
+                        # Already replicated — just register as known, no copy needed
+                        continue
 
                     tasks.append(
                         copy_engine.handle_new_trade(

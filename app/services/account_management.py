@@ -127,12 +127,9 @@ class MT5AccountManager:
                 if account.state != "DEPLOYED":
                     return {}
 
-                # 5s budget for the connection step — keeps the semaphore slot from
-                # being held for the full outer 6s when a build is in progress.
-                # CancelledError here sets a 15s cooldown (route timeout), not 300s.
-                connection = await asyncio.wait_for(
-                    rpc_pool.get_connection(account_id), timeout=5
-                )
+                # get_connection() returns immediately (connection ready or error)
+                # — the build happens in a background task, never blocking here.
+                connection = await rpc_pool.get_connection(account_id)
 
                 start = time.perf_counter()
 

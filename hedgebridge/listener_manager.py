@@ -7,6 +7,7 @@ from app.model import TradingAccount, CopyRelationship
 from hedgebridge.listener import MetaApiTradeListener
 from hedgebridge.api_client import get_metaapi_client, reset_metaapi_client
 from hedgebridge.connection_store import set_connection, get_connection, remove_connection, get_all_connections
+from hedgebridge.rpc_pool import rpc_pool
 import time
 
 
@@ -190,6 +191,11 @@ class ListenerManager:
         # Reset MetaApi client — zombie state likely after long outage
         print("[LM] Resetting MetaApi client after global outage...")
         await self._reset_sdk_safely()
+
+        # Let rpc_pool rebuild connections immediately — its build-fail cooldowns
+        # were set during the outage and would otherwise block trade copying for
+        # up to _build_fail_cooldown seconds after the network returns.
+        rpc_pool.clear_cooldowns()
 
         self._global_outage = False
         print("🌐 Global outage cooldown complete — queuing fresh reconnects for all accounts")
