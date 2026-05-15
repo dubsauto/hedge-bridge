@@ -171,7 +171,11 @@ document.getElementById("togglePassword").addEventListener("click", function () 
   this.textContent = pwd.type === "password" ? "👁" : "🙈";
 });
 
-document.getElementById("logoutBtn").addEventListener("click", () => {
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  const token = localStorage.getItem("token");
+  if (token) {
+    try { await fetch("/logout", { method: "POST", headers: { Authorization: "Bearer " + token } }); } catch {}
+  }
   localStorage.removeItem("token");
   window.location.href = "/";
 });
