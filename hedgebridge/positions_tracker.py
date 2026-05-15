@@ -6,18 +6,26 @@
 #   - One MetaApi instance per user (isolated, same pattern as dashboard_session).
 #   - RPC connections only — no dependency on connection_store / streaming.
 #   - Runs per-user in parallel every POLL_INTERVAL seconds.
-#   - For each user: check all their master accounts via RPC get_positions().
-#   - If a master position is not replicated to every slave within
-#     REPLICATION_WINDOW seconds → emergency-close master + any slaves that
-#     did receive the copy.
-#   - On any RPC failure/timeout → destroy that user's session immediately;
-#     next poll creates a fresh MetaApi + connections.
+#
+# Two safety checks per poll cycle (run in parallel):
+#
+#   OPEN CHECK — _check_master():
+#     If a new master position is not replicated to every slave within
+#     REPLICATION_WINDOW seconds → close master + any slaves that did copy.
+#
+#   CLOSE CHECK — _check_closes_for_user():
+#     If a position is closed on the master OR any slave (trade closed in MT5
+#     but listener missed it), and after REPLICATION_WINDOW the close has not
+#     propagated to all sides → close all remaining open positions.
+#
+#   On any RPC failure/timeout → destroy that user's session immediately;
+#   next poll creates a fresh MetaApi + connections.
 
 import asyncio
 import os
 import sys
 from datetime import datetime
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from metaapi_cloud_sdk import MetaApi
 
@@ -131,14 +139,27 @@ _sessions = _TrackerSessionManager()
 
 # ─── Tracker ──────────────────────────────────────────────────────────────
 
+# Link tuple shape stored in memory to avoid holding SQLAlchemy objects across
+# session boundaries: (id, master_account_id, master_ticket, slave_account_id, slave_ticket)
+_LinkTuple = Tuple[int, int, str, Optional[int], Optional[str]]
+
+
 class PositionsTracker:
     def __init__(self):
         self._running = False
         self._intervening: set = set()
+        # In-memory close-detection timestamps.
+        # Key: "close:{master_db_id}:{master_ticket}"
+        # Value: datetime when close was first detected on any side.
+        self._close_detected: Dict[str, datetime] = {}
 
     # ── RPC helpers ───────────────────────────────────────────────────────
 
-    async def _get_positions(self, user_id: int, meta_id: str) -> List[dict]:
+    async def _get_positions(self, user_id: int, meta_id: str) -> Optional[List[dict]]:
+        """
+        Returns list of live positions, or None on failure.
+        None means "unknown" — callers must not treat it as "no positions".
+        """
         try:
             conn = await asyncio.wait_for(
                 _sessions.get_connection(user_id, meta_id),
@@ -148,7 +169,7 @@ class PositionsTracker:
         except BaseException as e:
             print(f"[Tracker] get_positions failed user={user_id} account={meta_id}: {type(e).__name__}: {e}")
             await _sessions.destroy_session(user_id)
-            return []
+            return None
 
     async def _close_position(self, user_id: int, meta_id: str, ticket: str) -> bool:
         try:
@@ -163,23 +184,23 @@ class PositionsTracker:
             await _sessions.destroy_session(user_id)
             return False
 
-    # ── Emergency close ───────────────────────────────────────────────────
+    # ── OPEN CHECK — emergency close (failed replication on open) ─────────
 
-    async def _emergency_close(
+    async def _emergency_close_open(
         self,
         user_id: int,
         master_acc: TradingAccount,
         master_ticket: str,
         slave_links: List[CopyTradeLink],
     ):
-        key = f"{master_acc.id}:{master_ticket}"
+        key = f"open:{master_acc.id}:{master_ticket}"
         if key in self._intervening:
             return
         self._intervening.add(key)
 
         try:
             print(
-                f"🚨 [Tracker] EMERGENCY CLOSE — master={master_acc.id} "
+                f"🚨 [Tracker] OPEN — EMERGENCY CLOSE master={master_acc.id} "
                 f"ticket={master_ticket} slaves={[l.slave_account_id for l in slave_links]}"
             )
 
@@ -211,13 +232,9 @@ class PositionsTracker:
                 meta.append(("slave", link.slave_account_id, link.slave_ticket))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-
             for (role, acc_id, ticket), result in zip(meta, results):
                 ok = result is True
-                print(
-                    f"[Tracker] Close {role} acc={acc_id} ticket={ticket}: "
-                    f"{'OK' if ok else f'FAILED ({result})'}"
-                )
+                print(f"[Tracker] Open-close {role} acc={acc_id} ticket={ticket}: {'OK' if ok else f'FAILED ({result})'}")
 
             write_db = SessionLocal()
             try:
@@ -237,10 +254,7 @@ class PositionsTracker:
 
                 tracked = (
                     write_db.query(TrackedPosition)
-                    .filter_by(
-                        master_account_id=master_acc.id,
-                        master_ticket=master_ticket,
-                    )
+                    .filter_by(master_account_id=master_acc.id, master_ticket=master_ticket)
                     .first()
                 )
                 if tracked:
@@ -248,17 +262,91 @@ class PositionsTracker:
                     tracked.intervention_at = now
 
                 write_db.commit()
-                print(f"[Tracker] DB updated for ticket={master_ticket}")
+                print(f"[Tracker] Open-close DB updated ticket={master_ticket}")
             except Exception as e:
                 write_db.rollback()
-                print(f"[Tracker] DB update failed: {e}")
+                print(f"[Tracker] Open-close DB update failed: {e}")
             finally:
                 write_db.close()
 
         finally:
             self._intervening.discard(key)
 
-    # ── Per-master check ──────────────────────────────────────────────────
+    # ── CLOSE CHECK — emergency close (close not propagated) ─────────────
+
+    async def _emergency_close_sync(
+        self,
+        user_id: int,
+        master_acc: TradingAccount,
+        master_ticket: str,
+        link_tuples: List[_LinkTuple],
+        live_tickets: Dict[int, Optional[Set[str]]],
+        slave_meta_map: Dict[int, TradingAccount],
+    ):
+        key = f"close:{master_acc.id}:{master_ticket}"
+        if key in self._intervening:
+            return
+        self._intervening.add(key)
+
+        try:
+            print(f"🚨 [Tracker] CLOSE SYNC master={master_acc.id} ticket={master_ticket}")
+
+            tasks = []
+            meta = []
+
+            # Close master if still open (or unknown — err on side of action)
+            master_live = live_tickets.get(master_acc.id)
+            if master_live is None or master_ticket in master_live:
+                tasks.append(self._close_position(user_id, master_acc.metaapi_account_id, master_ticket))
+                meta.append(("master", master_acc.id, master_ticket))
+
+            for (_, _, _, slave_db_id, slave_ticket) in link_tuples:
+                if not slave_ticket or not slave_db_id:
+                    continue
+                slave_acc = slave_meta_map.get(slave_db_id)
+                if not slave_acc or not slave_acc.metaapi_account_id:
+                    continue
+                slave_live = live_tickets.get(slave_db_id)
+                if slave_live is None or slave_ticket in slave_live:
+                    tasks.append(self._close_position(user_id, slave_acc.metaapi_account_id, slave_ticket))
+                    meta.append(("slave", slave_db_id, slave_ticket))
+
+            if not tasks:
+                print(f"[Tracker] Close sync — nothing to close for {master_acc.id}:{master_ticket}")
+                return
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for (role, acc_id, ticket), result in zip(meta, results):
+                ok = result is True
+                print(f"[Tracker] Close-sync {role} acc={acc_id} ticket={ticket}: {'OK' if ok else f'FAILED ({result})'}")
+
+            write_db = SessionLocal()
+            try:
+                now = datetime.utcnow()
+                link_ids = [t[0] for t in link_tuples]
+                rows = (
+                    write_db.query(CopyTradeLink)
+                    .filter(
+                        CopyTradeLink.id.in_(link_ids),
+                        CopyTradeLink.status == "open",
+                    )
+                    .all()
+                )
+                for row in rows:
+                    row.status = "closed"
+                    row.closed_at = now
+                write_db.commit()
+                print(f"[Tracker] Close-sync DB updated {len(rows)} links for ticket={master_ticket}")
+            except Exception as e:
+                write_db.rollback()
+                print(f"[Tracker] Close-sync DB update failed: {e}")
+            finally:
+                write_db.close()
+
+        finally:
+            self._intervening.discard(key)
+
+    # ── Per-master open check ─────────────────────────────────────────────
 
     async def _check_master(
         self,
@@ -267,8 +355,8 @@ class PositionsTracker:
         expected_slave_ids: Set,
     ):
         positions = await self._get_positions(user_id, master_acc.metaapi_account_id)
-        if not positions:
-            return
+        if positions is None:
+            return  # RPC failed — session already destroyed
 
         now = datetime.utcnow()
         db = SessionLocal()
@@ -278,10 +366,7 @@ class PositionsTracker:
 
                 tracked = (
                     db.query(TrackedPosition)
-                    .filter_by(
-                        master_account_id=master_acc.id,
-                        master_ticket=ticket,
-                    )
+                    .filter_by(master_account_id=master_acc.id, master_ticket=ticket)
                     .first()
                 )
 
@@ -322,11 +407,11 @@ class PositionsTracker:
                     continue
 
                 print(
-                    f"⚠️ [Tracker] ticket={ticket} master={master_acc.id} "
-                    f"age={age:.1f}s — missing slaves {missing} → scheduling close"
+                    f"⚠️ [Tracker] OPEN not replicated ticket={ticket} master={master_acc.id} "
+                    f"age={age:.1f}s missing={missing}"
                 )
                 asyncio.create_task(
-                    self._emergency_close(user_id, master_acc, ticket, links)
+                    self._emergency_close_open(user_id, master_acc, ticket, links)
                 )
 
         except Exception as e:
@@ -334,7 +419,131 @@ class PositionsTracker:
         finally:
             db.close()
 
-    # ── Per-user check (masters run in parallel) ──────────────────────────
+    # ── Per-user close check ──────────────────────────────────────────────
+
+    async def _check_closes_for_user(
+        self,
+        user_id: int,
+        master_accs: List[TradingAccount],
+    ):
+        master_db_ids = [acc.id for acc in master_accs]
+
+        # Load open links and slave accounts
+        db = SessionLocal()
+        try:
+            open_links = (
+                db.query(CopyTradeLink)
+                .filter(
+                    CopyTradeLink.master_account_id.in_(master_db_ids),
+                    CopyTradeLink.status == "open",
+                    CopyTradeLink.slave_ticket.isnot(None),
+                )
+                .all()
+            )
+            if not open_links:
+                return
+
+            slave_db_ids = list({l.slave_account_id for l in open_links if l.slave_account_id})
+            slave_accs_list = (
+                db.query(TradingAccount)
+                .filter(
+                    TradingAccount.id.in_(slave_db_ids),
+                    TradingAccount.metaapi_account_id.isnot(None),
+                )
+                .all()
+            )
+
+            # Detach data before closing session
+            link_tuples: List[_LinkTuple] = [
+                (l.id, l.master_account_id, l.master_ticket, l.slave_account_id, l.slave_ticket)
+                for l in open_links
+            ]
+        finally:
+            db.close()
+
+        master_meta_map: Dict[int, TradingAccount] = {acc.id: acc for acc in master_accs}
+        slave_meta_map: Dict[int, TradingAccount] = {acc.id: acc for acc in slave_accs_list}
+
+        # Deduplicated set of (db_id, metaapi_id) to poll — master + slaves
+        accounts_to_poll: Dict[int, str] = {}
+        for acc in master_accs:
+            accounts_to_poll[acc.id] = acc.metaapi_account_id
+        for acc in slave_accs_list:
+            accounts_to_poll[acc.id] = acc.metaapi_account_id
+
+        # Fetch live positions for all accounts in parallel
+        db_ids = list(accounts_to_poll.keys())
+        results = await asyncio.gather(
+            *[self._get_positions(user_id, accounts_to_poll[db_id]) for db_id in db_ids],
+            return_exceptions=True,
+        )
+
+        # None = RPC failed (unknown), treat as "don't trigger false positive"
+        live_tickets: Dict[int, Optional[Set[str]]] = {}
+        for db_id, result in zip(db_ids, results):
+            if isinstance(result, list):
+                live_tickets[db_id] = {str(p.get("id") or p.get("ticket")) for p in result}
+            else:
+                live_tickets[db_id] = None
+
+        # Group links by (master_account_id, master_ticket)
+        groups: Dict[Tuple[int, str], List[_LinkTuple]] = {}
+        for lt in link_tuples:
+            key = (lt[1], lt[2])
+            groups.setdefault(key, []).append(lt)
+
+        now = datetime.utcnow()
+
+        for (master_db_id, master_ticket), lts in groups.items():
+            detection_key = f"close:{master_db_id}:{master_ticket}"
+
+            master_live = live_tickets.get(master_db_id)
+            # Only treat as closed if we have a definitive answer (not None)
+            master_closed = master_live is not None and master_ticket not in master_live
+
+            any_slave_closed = False
+            for (_, _, _, slave_db_id, slave_ticket) in lts:
+                if not slave_ticket or slave_db_id not in live_tickets:
+                    continue
+                slave_live = live_tickets[slave_db_id]
+                if slave_live is not None and slave_ticket not in slave_live:
+                    any_slave_closed = True
+                    break
+
+            if not master_closed and not any_slave_closed:
+                # Everything still open — clear any stale detection
+                self._close_detected.pop(detection_key, None)
+                continue
+
+            # At least one side closed — start or continue tracking
+            if detection_key not in self._close_detected:
+                who = "master" if master_closed else "slave"
+                print(f"[Tracker] Close detected on {who} → {master_db_id}:{master_ticket} — watching")
+                self._close_detected[detection_key] = now
+                continue
+
+            elapsed = (now - self._close_detected[detection_key]).total_seconds()
+            if elapsed < REPLICATION_WINDOW:
+                continue
+
+            # Window expired — close all remaining open sides
+            print(
+                f"⚠️ [Tracker] CLOSE not propagated after {elapsed:.1f}s "
+                f"→ {master_db_id}:{master_ticket} — syncing close"
+            )
+            self._close_detected.pop(detection_key, None)
+
+            master_acc = master_meta_map.get(master_db_id)
+            if not master_acc:
+                continue
+
+            asyncio.create_task(
+                self._emergency_close_sync(
+                    user_id, master_acc, master_ticket, lts, live_tickets, slave_meta_map
+                )
+            )
+
+    # ── Per-user entry point (both checks run in parallel) ────────────────
 
     async def _check_user(
         self,
@@ -343,10 +552,11 @@ class PositionsTracker:
         master_slaves: Dict[int, Set],
     ):
         await asyncio.gather(
-            *[
-                self._check_master(user_id, acc, master_slaves[acc.id])
-                for acc in master_accs
-            ],
+            asyncio.gather(
+                *[self._check_master(user_id, acc, master_slaves[acc.id]) for acc in master_accs],
+                return_exceptions=True,
+            ),
+            self._check_closes_for_user(user_id, master_accs),
             return_exceptions=True,
         )
 
@@ -382,7 +592,6 @@ class PositionsTracker:
                 .all()
             )
 
-            # Group by owner so each user runs in parallel with its own session
             user_masters: Dict[int, List[TradingAccount]] = {}
             for acc in masters:
                 user_masters.setdefault(acc.owner_user_id, []).append(acc)
