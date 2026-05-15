@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 from app.database import get_db
 from app.model import User, UserPermission
-from app.auth import verify_password, create_access_token, hash_password
+from app.auth import verify_password, create_access_token, hash_password, get_current_user
+from hedgebridge.dashboard_session import dashboard_session
 
 load_dotenv()
 
@@ -48,6 +49,14 @@ async def login(
         "access_token": token,
         "role": user.role
     }
+
+
+@router.post("/logout")
+async def logout(payload: dict = Depends(get_current_user)):
+    user_id = payload.get("user_id")
+    if user_id:
+        await dashboard_session.on_logout(user_id)
+    return {"message": "Logged out"}
 
 
 @router.post("/signup")

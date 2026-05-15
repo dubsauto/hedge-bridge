@@ -1,9 +1,27 @@
 # app/services/account_management.py
+#
+# Administrative MetaAPI operations (create, deploy, undeploy, remove, update).
+# Uses a shared SDK instance — no connection pooling needed here.
 
 import asyncio
 import time
-from typing import Optional, Dict, Any
-from hedgebridge.rpc_pool import rpc_pool
+from typing import Optional, Dict
+
+from hedgebridge.api_client import get_metaapi_client
+
+# Shared SDK instance for admin calls only (no RPC connections)
+_api = None
+
+def _get_admin_api():
+    global _api
+    if _api is None:
+        _api = get_metaapi_client()
+    return _api
+
+
+async def _get_account(account_id: str):
+    api = _get_admin_api()
+    return await api.metatrader_account_api.get_account(account_id)
 
 
 class MT5AccountManager:
@@ -11,9 +29,6 @@ class MT5AccountManager:
         self._metrics_cache: Dict[str, Dict] = {}
         self._semaphore = asyncio.Semaphore(5)
 
-    # =========================
-    # ADD ACCOUNT
-    # =========================
     async def add_account(
         self,
         name: str,
@@ -25,7 +40,7 @@ class MT5AccountManager:
         magic: Optional[int] = None
     ) -> Dict:
         try:
-            api = await rpc_pool._get_api()
+            api = _get_admin_api()
             accounts = await api.metatrader_account_api.get_accounts_with_infinite_scroll_pagination()
 
             for acc in accounts:
@@ -44,93 +59,64 @@ class MT5AccountManager:
                 'magic': 0 if manual_trades else (magic or 0)
             }
 
-            api = await rpc_pool._get_api()
             new_account = await api.metatrader_account_api.create_account(account_data)
-
-            # Pre-cache the account object in the pool
-            rpc_pool._accounts[new_account.id] = new_account
-
             return {"success": True, "account_id": new_account.id}
 
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    # =========================
-    # REMOVE ACCOUNT
-    # =========================
     async def remove_account(self, account_id: str) -> Dict:
         try:
-            account = await rpc_pool.get_account(account_id)
+            account = await _get_account(account_id)
             await account.remove()
-            await rpc_pool.invalidate(account_id)
             return {"success": True}
         except Exception as e:
             if "not found" in str(e).lower():
                 return {"success": True}
             return {"success": False, "message": str(e)}
 
-    # =========================
-    # UPDATE ACCOUNT
-    # =========================
     async def update_account(self, account_id: str, update_data: Dict) -> Dict:
         try:
-            account = await rpc_pool.get_account(account_id)
+            account = await _get_account(account_id)
             await account.update(update_data)
             return {"success": True}
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    # =========================
-    # DEPLOY
-    # =========================
     async def deploy(self, account_id: str) -> Dict:
         try:
-            account = await rpc_pool.get_account(account_id)
+            account = await _get_account(account_id)
             if account.state != "DEPLOYED":
                 await account.deploy()
             return {"success": True}
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    # =========================
-    # UNDEPLOY
-    # =========================
     async def undeploy(self, account_id: str) -> Dict:
         try:
-            account = await rpc_pool.get_account(account_id)
+            account = await _get_account(account_id)
             if account.state != "UNDEPLOYED":
                 await account.undeploy()
             return {"success": True}
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    # =========================
-    # METRICS
-    # =========================
-    async def get_account_metrics(self, account_id: str):
+    async def get_account_metrics(self, account_id: str, connection=None) -> Dict:
+        """
+        Fetch balance/equity/positions for dashboard display.
+        Pass the user's already-open dashboard_session connection.
+        Returns {} if no connection is provided or on error.
+        """
         async with self._semaphore:
             now = time.time()
-
             cached = self._metrics_cache.get(account_id)
             if cached and now - cached["ts"] < 30:
                 return cached["data"]
 
+            if not connection:
+                return {}
+
             try:
-                account = await rpc_pool.get_account(account_id)
-
-                dedicated_ip = None
-                try:
-                    dedicated_ip = getattr(account, "allocate_dedicated_ip", None)
-                except Exception:
-                    pass
-
-                if account.state != "DEPLOYED":
-                    return {}
-
-                # get_connection() returns immediately (connection ready or error)
-                # — the build happens in a background task, never blocking here.
-                connection = await rpc_pool.get_connection(account_id)
-
                 start = time.perf_counter()
 
                 info, positions = await asyncio.gather(
@@ -145,17 +131,16 @@ class MT5AccountManager:
                     "equity": info.get("equity"),
                     "latency_ms": round(latency_ms, 2),
                     "positions_count": len(positions),
-                    "dedicated_ip": dedicated_ip
                 }
 
                 self._metrics_cache[account_id] = {"ts": now, "data": result}
                 return result
 
             except asyncio.TimeoutError:
-                print(f"[Timeout] {account_id}")
+                print(f"[Metrics] Timeout → {account_id}")
                 return {}
             except Exception as e:
-                print(f"[Error] {account_id}: {e}")
+                print(f"[Metrics] Error → {account_id}: {e}")
                 return {}
 
 

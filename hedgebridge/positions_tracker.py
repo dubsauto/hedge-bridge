@@ -1,24 +1,22 @@
 # hedgebridge/positions_tracker.py
 #
 # Standalone safety-net process.
-# Polls master accounts via RPC (no streaming) and verifies that every open
-# master position has been replicated to all slave accounts within
-# REPLICATION_WINDOW seconds.  If replication is incomplete after that window,
-# it closes the master trade AND every slave that did receive the copy.
+# Polls master accounts and verifies that every open master position has been
+# replicated to all slave accounts within REPLICATION_WINDOW seconds.
+# If replication is incomplete after that window, closes the master trade AND
+# every slave that did receive the copy.
 #
-# Run standalone:
-#   python -m hedgebridge.positions_tracker
-# Or import and call positions_tracker.run() inside an asyncio event loop.
+# Uses the streaming connections already maintained by listener_manager
+# (connection_store) — no separate RPC connections needed.
 
 import asyncio
 import os
 import sys
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Dict
 
 from sqlalchemy.orm import Session
 
-# Ensure project root is importable when run as __main__
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
@@ -31,31 +29,31 @@ from app.model import (
     CopyTradeLink,
     TrackedPosition,
 )
-from hedgebridge.rpc_pool import rpc_pool
+from hedgebridge.connection_store import get_connection
 
 # ─── Tuning ────────────────────────────────────────────────────────────────
 REPLICATION_WINDOW: int = int(os.getenv("TRACKER_REPLICATION_WINDOW", "10"))
-POLL_INTERVAL: int = int(os.getenv("TRACKER_POLL_INTERVAL", "5"))
-RPC_TIMEOUT: int = 8
-CLOSE_TIMEOUT: int = 15
+POLL_INTERVAL: int      = int(os.getenv("TRACKER_POLL_INTERVAL", "5"))
+CLOSE_TIMEOUT: int      = 15
+GET_TIMEOUT: int        = 8
 # ───────────────────────────────────────────────────────────────────────────
 
 
 class PositionsTracker:
     def __init__(self):
         self._running = False
-        # Prevents concurrent emergency-close coroutines for the same ticket
         self._intervening: set = set()
 
-    # ─── RPC helpers ───────────────────────────────────────────────────────
+    # ─── Streaming-connection helpers ──────────────────────────────────────
 
     async def _get_positions(self, metaapi_account_id: str) -> List[dict]:
+        """Fetch positions via the live streaming connection."""
         try:
-            conn = await asyncio.wait_for(
-                rpc_pool.get_connection(metaapi_account_id), timeout=RPC_TIMEOUT
-            )
+            conn = get_connection(metaapi_account_id)
+            if conn is None:
+                return []
             positions = await asyncio.wait_for(
-                conn.get_positions(), timeout=RPC_TIMEOUT
+                conn.get_positions(), timeout=GET_TIMEOUT
             )
             return positions or []
         except Exception as e:
@@ -63,11 +61,15 @@ class PositionsTracker:
             return []
 
     async def _close_position(self, metaapi_account_id: str, ticket: str) -> bool:
+        """Close a position via the live streaming connection."""
         try:
-            conn = await asyncio.wait_for(
-                rpc_pool.get_connection(metaapi_account_id), timeout=RPC_TIMEOUT
+            conn = get_connection(metaapi_account_id)
+            if conn is None:
+                print(f"[Tracker] No connection for {metaapi_account_id} — cannot close {ticket}")
+                return False
+            await asyncio.wait_for(
+                conn.close_position(ticket), timeout=CLOSE_TIMEOUT
             )
-            await asyncio.wait_for(conn.close_position(ticket), timeout=CLOSE_TIMEOUT)
             return True
         except Exception as e:
             print(f"[Tracker] close_position failed {metaapi_account_id}/{ticket}: {e}")
@@ -92,7 +94,6 @@ class PositionsTracker:
                 f"ticket={master_ticket} slaves={[l.slave_account_id for l in slave_links]}"
             )
 
-            # Load slave account objects
             slave_ids = [l.slave_account_id for l in slave_links if l.slave_ticket]
             db = SessionLocal()
             try:
@@ -105,7 +106,6 @@ class PositionsTracker:
             finally:
                 db.close()
 
-            # Build parallel close tasks
             tasks = []
             meta = []
 
@@ -136,7 +136,6 @@ class PositionsTracker:
                     f"{'OK' if ok else f'FAILED ({result})'}"
                 )
 
-            # Update DB
             write_db = SessionLocal()
             try:
                 links_to_close = (
@@ -193,7 +192,6 @@ class PositionsTracker:
             for pos in positions:
                 ticket = str(pos.get("id") or pos.get("ticket"))
 
-                # Register on first sight
                 tracked = (
                     db.query(TrackedPosition)
                     .filter_by(
@@ -214,7 +212,6 @@ class PositionsTracker:
                         db.commit()
                     except Exception:
                         db.rollback()
-                    # Too fresh — skip this cycle
                     continue
 
                 if tracked.closed_by_tracker:
@@ -222,9 +219,8 @@ class PositionsTracker:
 
                 age = (now - tracked.first_seen_at).total_seconds()
                 if age < REPLICATION_WINDOW:
-                    continue  # still within grace window
+                    continue
 
-                # Check which slaves have a confirmed CopyTradeLink
                 links = (
                     db.query(CopyTradeLink)
                     .filter(
@@ -259,7 +255,6 @@ class PositionsTracker:
     async def _check_once(self):
         db = SessionLocal()
         try:
-            # Find all masters that have active copy relationships
             rel_rows = (
                 db.query(
                     CopyRelationship.master_account_id,
@@ -269,7 +264,6 @@ class PositionsTracker:
                 .all()
             )
 
-            # Build master → expected slave set mapping (skip NULL slave_account_id rows)
             master_slaves: Dict[int, set] = {}
             for master_id, slave_id in rel_rows:
                 if slave_id is not None:
@@ -291,7 +285,6 @@ class PositionsTracker:
         finally:
             db.close()
 
-        # Check all masters concurrently
         await asyncio.gather(
             *[
                 self._check_master(acc, master_slaves[acc.id])
@@ -306,8 +299,6 @@ class PositionsTracker:
             f"[Tracker] Starting — REPLICATION_WINDOW={REPLICATION_WINDOW}s "
             f"POLL_INTERVAL={POLL_INTERVAL}s"
         )
-
-        rpc_pool.start_watchdog()
 
         while self._running:
             try:
@@ -327,7 +318,5 @@ if __name__ == "__main__":
     from app.model import Base
     from app.database import engine
 
-    # Ensure tracked_positions table exists
     Base.metadata.create_all(bind=engine)
-
     asyncio.run(positions_tracker.run())

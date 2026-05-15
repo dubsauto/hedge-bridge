@@ -12,7 +12,7 @@ from app.model import TradingAccount, User, CopyRelationship, BotLog, CopyTradeL
 from app.services.logger import log
 from app.services.account_management import account_manager   
 from app.services.trading import trader
-from hedgebridge.rpc_pool import rpc_pool
+from hedgebridge.dashboard_session import dashboard_session
 
 router = APIRouter(prefix="/mt5", tags=["MT5 Accounts"])
 
@@ -186,9 +186,6 @@ async def deploy_mt5_account(
             message="Deploy request initiated"
         )
 
-        if trading_account.metaapi_account_id:
-            await rpc_pool.invalidate(trading_account.metaapi_account_id)
-
         result = await account_manager.deploy(trading_account.metaapi_account_id)
         print(result)
 
@@ -275,8 +272,6 @@ async def undeploy_mt5_account(
             trading_account.state = "undeployed"
             trading_account.connection_status = "disconnected"
             db.commit()
-            # ✅ Evict the now-dead connection from the pool
-            await rpc_pool.invalidate(trading_account.metaapi_account_id)
 
             # ✅ SUCCESS LOG
             log(db=db,
@@ -919,9 +914,7 @@ async def quick_trade(
         # SL/TP PROCESSING
         # =========================
         try:
-            # force=True: user-initiated trade — bypass cooldown, never lock them out
-            print(f"[Route] rpc_pool id: {id(rpc_pool)}")
-            connection = await rpc_pool.get_connection(account.metaapi_account_id, force=True)
+            connection = await dashboard_session.get_connection(user_id, account.metaapi_account_id)
 
             symbol_spec = await connection.get_symbol_specification(symbol)
             symbol_price = await connection.get_symbol_price(symbol)
@@ -1017,14 +1010,14 @@ async def quick_trade(
         # =========================
         if action == "buy":
             result = await trader.buy(
-                account.metaapi_account_id,
+                connection,
                 symbol, volume, sl, tp,
                 comment="QuickTrade",
                 magic=magic
             )
         else:
             result = await trader.sell(
-                account.metaapi_account_id,
+                connection,
                 symbol, volume, sl, tp,
                 comment="QuickTrade",
                 magic=magic
@@ -1232,11 +1225,7 @@ async def get_positions(
 
         import asyncio
 
-        # Add timeout to prevent hanging forever
-        connection = await asyncio.wait_for(
-            rpc_pool.get_connection(account.metaapi_account_id),
-            timeout=20
-        )
+        connection = await dashboard_session.get_connection(user_id, account.metaapi_account_id)
 
         positions = await asyncio.wait_for(
             connection.get_positions(),
