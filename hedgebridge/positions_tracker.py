@@ -35,7 +35,6 @@ from hedgebridge.connection_store import get_connection
 REPLICATION_WINDOW: int = int(os.getenv("TRACKER_REPLICATION_WINDOW", "10"))
 POLL_INTERVAL: int      = int(os.getenv("TRACKER_POLL_INTERVAL", "5"))
 CLOSE_TIMEOUT: int      = 15
-GET_TIMEOUT: int        = 8
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -47,15 +46,15 @@ class PositionsTracker:
     # ─── Streaming-connection helpers ──────────────────────────────────────
 
     async def _get_positions(self, metaapi_account_id: str) -> List[dict]:
-        """Fetch positions via the live streaming connection."""
+        """Read positions from the streaming connection's in-memory terminal state."""
         try:
             conn = get_connection(metaapi_account_id)
             if conn is None:
                 return []
-            positions = await asyncio.wait_for(
-                conn.get_positions(), timeout=GET_TIMEOUT
-            )
-            return positions or []
+            terminal = getattr(conn, "terminal_state", None)
+            if terminal is None:
+                return []
+            return list(terminal.positions or [])
         except Exception as e:
             print(f"[Tracker] get_positions failed {metaapi_account_id}: {e}")
             return []

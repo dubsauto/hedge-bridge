@@ -97,28 +97,47 @@ async def get_mt5_accounts(
         # STEP 4: ASYNC METRICS (CLEAN + FAST)
         # =========================
         import asyncio
+        had_real_failure = False
+
         async def fetch_metrics(acc):
+            nonlocal had_real_failure
+            meta_id = acc.get("metaapi_account_id")
             try:
                 deployed = (
                     acc["state"].lower() == "deployed"
                     and acc["online"]
-                    and acc["metaapi_account_id"]
+                    and meta_id
                 )
 
                 if not deployed:
+                    print(f"[Metrics] Skip {meta_id} — state={acc['state']} online={acc['online']}")
                     return {}
 
+                print(f"[Metrics] Building connection → user={user_id} account={meta_id}")
+                connection = await asyncio.wait_for(
+                    dashboard_session.get_connection(user_id, meta_id),
+                    timeout=25
+                )
+                print(f"[Metrics] Connection ready → {meta_id}, fetching metrics...")
                 return await asyncio.wait_for(
-                    account_manager.get_account_metrics(acc["metaapi_account_id"]),
-                    timeout=6
+                    account_manager.get_account_metrics(meta_id, connection=connection),
+                    timeout=10
                 )
 
-            except BaseException:   # catches CancelledError
+            except BaseException as e:
+                print(f"[Metrics] Failed for {meta_id}: {type(e).__name__}: {e}")
+                had_real_failure = True
                 return {}
 
         tasks = [fetch_metrics(acc) for acc in account_data]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Real failure (timeout, connection error) → destroy session so next
+        # request gets a fresh API instance and clean connections.
+        if had_real_failure:
+            print(f"[Metrics] Resetting session for user={user_id} after failure")
+            await dashboard_session.destroy_session(user_id)
 
         # =========================
         # STEP 5: BUILD RESPONSE
@@ -130,14 +149,11 @@ async def get_mt5_accounts(
 
             account_list.append({
                 **acc,
-
-                # CORE METRICS
                 "balance": metrics.get("balance", "N/A"),
                 "equity": metrics.get("equity", "N/A"),
                 "latency_ms": metrics.get("latency_ms", "N/A"),
-
-                # 🔥 NEW FIELDS
                 "positions_count": metrics.get("positions_count", 0),
+                "positions": metrics.get("positions", []),
                 "dedicated_ip": metrics.get("dedicated_ip"),
             })
 
@@ -1108,10 +1124,9 @@ async def close_position(
         if not account.metaapi_account_id:
             raise HTTPException(status_code=400, detail="Account not connected")
 
-        result = await trader.close_position(
-            account.metaapi_account_id,
-            position_id
-        )
+        print(f"[ClosePos] Getting connection → user={user_id} account={account.metaapi_account_id} position={position_id}")
+        connection = await dashboard_session.get_connection(user_id, account.metaapi_account_id)
+        result = await trader.close_position(connection, position_id)
 
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error"))
@@ -1234,20 +1249,14 @@ async def get_positions(
         print(f"✅ Retrieved {len(positions)} positions for account {account_id}")
         return {"success": True, "positions": positions}
 
-    except asyncio.TimeoutError:
-        print(f"⏰ Timeout while fetching positions for account {account_id}")
+    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+        kind = "Timeout" if isinstance(e, asyncio.TimeoutError) else "Cancelled"
+        print(f"⏰ {kind} fetching positions for account {account_id} — resetting session")
+        await dashboard_session.destroy_session(user_id)
         return {
             "success": False,
             "positions": [],
-            "error": "MetaApi not ready (connection timeout)"
-        }
-
-    except asyncio.CancelledError:
-        print(f"❌ Fetching positions cancelled for account {account_id}")
-        return {
-            "success": False,
-            "positions": [],
-            "error": "MetaApi connection was cancelled"
+            "error": "MetaApi not ready — retrying on next request"
         }
     
     except Exception as e:

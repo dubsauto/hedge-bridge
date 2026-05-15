@@ -111,12 +111,15 @@ class MT5AccountManager:
             now = time.time()
             cached = self._metrics_cache.get(account_id)
             if cached and now - cached["ts"] < 30:
+                print(f"[Metrics] Cache hit → {account_id}")
                 return cached["data"]
 
             if not connection:
+                print(f"[Metrics] No connection provided → {account_id}, returning empty")
                 return {}
 
             try:
+                print(f"[Metrics] Fetching account_information + positions → {account_id}")
                 start = time.perf_counter()
 
                 info, positions = await asyncio.gather(
@@ -125,19 +128,21 @@ class MT5AccountManager:
                 )
 
                 latency_ms = (time.perf_counter() - start) * 1000
+                print(f"[Metrics] Done → {account_id} balance={info.get('balance')} equity={info.get('equity')} positions={len(positions)} latency={round(latency_ms)}ms")
 
                 result = {
                     "balance": info.get("balance"),
                     "equity": info.get("equity"),
                     "latency_ms": round(latency_ms, 2),
                     "positions_count": len(positions),
+                    "positions": positions,
                 }
 
                 self._metrics_cache[account_id] = {"ts": now, "data": result}
                 return result
 
             except asyncio.TimeoutError:
-                print(f"[Metrics] Timeout → {account_id}")
+                print(f"[Metrics] Timeout fetching info/positions → {account_id}")
                 return {}
             except Exception as e:
                 print(f"[Metrics] Error → {account_id}: {e}")

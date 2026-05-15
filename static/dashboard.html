@@ -572,6 +572,8 @@ async function refreshCards() {
     // ✅ Keep the live overview bar in sync with selected account
     if (selectedAccountId) {
       updateLiveOverview(selectedAccountId);
+      // Positions now come from the accounts response — refresh trades table in place
+      updateRealTimeTrades(selectedAccountId);
     }
   } catch (err) {
     console.error("Card refresh failed:", err);
@@ -1234,7 +1236,7 @@ function updateLiveOverview(selectedId) {
   document.getElementById("connDot").className = `ui-dot ${dotClass}`;
 }
 
-async function updateRealTimeTrades(accountId) {
+function updateRealTimeTrades(accountId) {
   const tbody = document.getElementById("tradesBody");
   const lblScope = document.getElementById("lblScope");
   const account = currentAccounts.find(a => a.id == accountId);
@@ -1243,37 +1245,31 @@ async function updateRealTimeTrades(accountId) {
     tbody.innerHTML = `<tr><td colspan="7" class="text-center">Select an account</td></tr>`;
     return;
   }
-  try {
-    const res = await fetch(`/mt5/accounts/${accountId}/positions`, {
-      headers: { "Authorization": "Bearer " + token }
-    });
-    const data = await res.json();
-    const positions = data.positions || [];
-    if (!positions.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="text-center">No open trades</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = positions.map(p => {
-      const pnl = Number(p.profit || 0);
-      const pnlColor = pnl > 0 ? "color:#00c853;font-weight:600;" : pnl < 0 ? "color:#ff1744;font-weight:600;" : "color:#999;";
-      const pnlSign = pnl > 0 ? "+" : "";
-      return `
-        <tr>
-          <td>${p.symbol}</td>
-          <td>${p.type.replace("POSITION_TYPE_", "")}</td>
-          <td>${p.volume}</td>
-          <td>${p.openPrice}</td>
-          <td>${p.stopLoss || "-"}</td>
-          <td>${p.takeProfit || "-"}</td>
-          <td style="${pnlColor}">${pnlSign}${pnl.toFixed(2)}</td>
-          <td class="text-end">
-            <button class="btn btn-sm btn-danger" onclick="closeTrade('${p.id}')">Close</button>
-          </td>
-        </tr>`;
-    }).join("");
-  } catch (err) {
-    console.error(err);
+  // Positions are already included in the /mt5/accounts response (refreshed every 15s).
+  // No separate API call needed — avoids an extra RPC connection per poll cycle.
+  const positions = (account && account.positions) || [];
+  if (!positions.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center">No open trades</td></tr>`;
+    return;
   }
+  tbody.innerHTML = positions.map(p => {
+    const pnl = Number(p.profit || 0);
+    const pnlColor = pnl > 0 ? "color:#00c853;font-weight:600;" : pnl < 0 ? "color:#ff1744;font-weight:600;" : "color:#999;";
+    const pnlSign = pnl > 0 ? "+" : "";
+    return `
+      <tr>
+        <td>${p.symbol}</td>
+        <td>${(p.type || "").replace("POSITION_TYPE_", "")}</td>
+        <td>${p.volume}</td>
+        <td>${p.openPrice}</td>
+        <td>${p.stopLoss || "-"}</td>
+        <td>${p.takeProfit || "-"}</td>
+        <td style="${pnlColor}">${pnlSign}${pnl.toFixed(2)}</td>
+        <td class="text-end">
+          <button class="btn btn-sm btn-danger" onclick="closeTrade('${p.id}')">Close</button>
+        </td>
+      </tr>`;
+  }).join("");
 }
 
 const btnBuy = document.getElementById("btnBuy");
@@ -1394,8 +1390,10 @@ async function placeTrade(action) {
 
 function startTradesPolling(accountId) {
   if (tradesInterval) clearInterval(tradesInterval);
+  tradesInterval = null;
+  // Positions come from the accounts response — no separate poll needed.
+  // refreshCards (every 15s) already calls updateRealTimeTrades after each refresh.
   updateRealTimeTrades(accountId);
-  tradesInterval = setInterval(() => updateRealTimeTrades(accountId), 10000);
 }
 
 async function closeTrade(positionId) {
@@ -1410,7 +1408,7 @@ async function closeTrade(positionId) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Close failed");
     log(`🔻 Trade closed successfully`);
-    updateRealTimeTrades(selectedAccountId);
+    await refreshCards(); // fetch fresh account data + positions from server
   } catch (err) {
     log(`❌ ${err.message}`);
   }
