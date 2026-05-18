@@ -1,74 +1,170 @@
 # hedgebridge/listener_manager.py
+#
+# Per-account MetaApi isolation.
+#
+# Root cause of the old memory leak:
+#   A single shared MetaApi SDK was used for all accounts.  When any account
+#   triggered a nuclear reset, _reset_sdk_safely() replaced the global instance.
+#   All other accounts' streaming connections were still pointing at the old
+#   (now-closed) SDK — they became orphaned, holding WebSocket threads,
+#   asyncio tasks and subscription listeners in memory forever.
+#
+# Fix:
+#   self._apis[account_id] → one MetaApi instance per account.
+#   Teardown destroys the connection AND that account's MetaApi completely.
+#   Reattach always creates a fresh MetaApi for that account.
+#   A failure in one account cannot pollute or reset another account's SDK.
 
 import asyncio
+import os
+import time
+from typing import Dict, Optional
+
+from metaapi_cloud_sdk import MetaApi
 from sqlalchemy.orm import Session
+
 from app.database import SessionLocal
 from app.model import TradingAccount, CopyRelationship
 from hedgebridge.listener import MetaApiTradeListener
-from hedgebridge.api_client import get_metaapi_client, reset_metaapi_client
-from hedgebridge.connection_store import set_connection, get_connection, remove_connection, get_all_connections
-import time
+from hedgebridge.api_client import get_metaapi_client        # REST admin calls only
+from hedgebridge.connection_store import (
+    set_connection, get_connection, remove_connection, get_all_connections
+)
 
 
-GRACE_PERIOD = 60
-KEEPALIVE_INTERVAL = 45
-# If a synced listener receives NO events for this long, the MetaAPI subscription
-# manager has likely dropped its subscriptions silently (no on_disconnected fires).
-# Force a reconnect to restore event delivery.
-EVENT_SILENCE_THRESHOLD = 120
-SYNC_TIMEOUT = 15      # per attempt; 2 attempts = 30s max before reconnect
-MAX_SYNC_ATTEMPTS = 2  # 2 × 15s = 30s before reconnect (sync failures are MetaAPI-side,
-                       # not account failures — reconnect_attempts is reset on sync fail)
-DEPLOY_WAIT = 8
-CONNECT_TIMEOUT = 15   # connection.connect() hard deadline
-CLOSE_TIMEOUT = 10     # connection.close() hard deadline
-RELOAD_TIMEOUT = 5     # account.reload() hard deadline
-GLOBAL_OUTAGE_THRESHOLD = 0.6
-GLOBAL_OUTAGE_WINDOW = 10.0
-GLOBAL_OUTAGE_COOLDOWN = 45
+GRACE_PERIOD              = 60
+KEEPALIVE_INTERVAL        = 45
+EVENT_SILENCE_THRESHOLD   = 120
+SYNC_TIMEOUT              = 15
+MAX_SYNC_ATTEMPTS         = 2
+DEPLOY_WAIT               = 8
+CONNECT_TIMEOUT           = 15
+CLOSE_TIMEOUT             = 10
+RELOAD_TIMEOUT            = 5
+GLOBAL_OUTAGE_THRESHOLD   = 0.6
+GLOBAL_OUTAGE_WINDOW      = 10.0
+GLOBAL_OUTAGE_COOLDOWN    = 45
+
+
+def _make_api() -> MetaApi:
+    token = os.getenv("ACCESS_TOKEN")
+    if not token:
+        raise ValueError("ACCESS_TOKEN is not set")
+    return MetaApi(token)
 
 
 class ListenerManager:
     def __init__(self):
-        self._lock = asyncio.Lock()
-        self._running = False
-        self._listeners = {}          # metaapi_account_id → listener
-        self._sync_tasks = {}         # metaapi_account_id → Task
-        self._connected_at = {}       # metaapi_account_id → monotonic timestamp
-        self._attaching = set()       # metaapi_account_ids currently being attached
-        self._api = None
-        self._reconnect_queue = asyncio.Queue()
-        self._reconnect_attempts = {} # metaapi_account_id → int
-        self._reconnect_limit = 3     # nuclear reset after 3 cycles (was 5)
-                                      # 3 × ~60s = ~3 min vs. 5 × ~180s = ~15 min
+        self._lock              = asyncio.Lock()
+        self._running           = False
 
-        # Serialises SDK creation/close so concurrent failures don't each
-        # create a new MetaApi instance and leak the previous ones.
-        self._sdk_reset_lock = asyncio.Lock()
+        # ── Per-account state ────────────────────────────────────────────
+        self._apis: Dict[str, MetaApi] = {}   # metaapi_account_id → MetaApi
+        self._listeners: Dict[str, MetaApiTradeListener] = {}
+        self._sync_tasks: Dict[str, asyncio.Task] = {}
+        self._connected_at: Dict[str, float] = {}
+        self._attaching: set = set()
 
-        # Guard against cascade SDK resets
-        self._last_sdk_reset = 0.0
+        # ── Reconnect queue ──────────────────────────────────────────────
+        self._reconnect_queue    = asyncio.Queue()
+        self._reconnect_attempts: Dict[str, int] = {}
+        self._reconnect_limit    = 3
 
-        # Global outage detection
-        self._disconnect_times = {}
-        self._global_outage = False
-        self._outage_recovery_task = None
+        # ── Global outage detection ──────────────────────────────────────
+        self._disconnect_times: Dict[str, float] = {}
+        self._global_outage      = False
+        self._outage_recovery_task: Optional[asyncio.Task] = None
 
-    # =====================================
+    # =========================================================================
+    # PER-ACCOUNT MetaApi LIFECYCLE
+    # =========================================================================
+
+    def _create_api_for(self, account_id: str) -> MetaApi:
+        """Create a fresh MetaApi instance for this account and store it."""
+        api = _make_api()
+        self._apis[account_id] = api
+        print(f"[LM] Fresh MetaApi → {account_id}")
+        return api
+
+    async def _destroy_api_for(self, account_id: str):
+        """Fully close and discard the MetaApi instance for this account."""
+        api = self._apis.pop(account_id, None)
+        if api is None:
+            return
+        try:
+            if hasattr(api, "close"):
+                result = api.close()
+                if asyncio.iscoroutine(result):
+                    await asyncio.wait_for(result, timeout=10)
+            print(f"[LM] MetaApi closed → {account_id}")
+        except Exception as e:
+            print(f"[LM] MetaApi close error → {account_id}: {e}")
+
+    # =========================================================================
+    # SHARED TEARDOWN HELPER
+    # =========================================================================
+
+    async def _teardown_account(self, account_id: str, mark_attaching: bool = False):
+        """
+        Fully tear down one account: remove from all stores, cancel sync task,
+        close the streaming connection, destroy its private MetaApi instance.
+
+        mark_attaching=True — hold the attaching slot after teardown (nuclear reset).
+        mark_attaching=False — release the slot (remove / mark_disconnected).
+        """
+        async with self._lock:
+            connection = get_connection(account_id)
+            listener   = self._listeners.pop(account_id, None)
+            if mark_attaching:
+                self._attaching.add(account_id)
+            else:
+                self._attaching.discard(account_id)
+            self._connected_at.pop(account_id, None)
+
+        self._cancel_sync_task(account_id)
+        self._purge_account_state(account_id)
+
+        # Detach listener before closing connection
+        if listener and connection:
+            try:
+                connection.remove_synchronization_listener(listener)
+            except Exception:
+                pass
+
+        # Clear listener caches
+        if listener:
+            try:
+                listener._known_positions.clear()
+                listener._position_cache.clear()
+                listener._disconnected = False
+            except Exception:
+                pass
+
+        # Close streaming connection
+        if connection:
+            await self._close_stream_safely(connection, account_id)
+            remove_connection(account_id)
+
+        # Destroy private MetaApi — this is what was leaking
+        await self._destroy_api_for(account_id)
+
+        self._set_listener_active(account_id, False)
+
+    # =========================================================================
     # PER-ACCOUNT STATE CLEANUP
-    # =====================================
+    # =========================================================================
+
     def _purge_account_state(self, account_id: str):
-        """Remove all per-account metadata so memory is reclaimed."""
         self._reconnect_attempts.pop(account_id, None)
         self._disconnect_times.pop(account_id, None)
         self._connected_at.pop(account_id, None)
         self._attaching.discard(account_id)
 
-    # =====================================
+    # =========================================================================
     # SAFE STREAM CLOSE
-    # =====================================
+    # =========================================================================
+
     async def _close_stream_safely(self, connection, account_id: str):
-        """Close a streaming connection with a hard timeout so callers never hang."""
         try:
             await asyncio.wait_for(connection.close(), timeout=CLOSE_TIMEOUT)
             print(f"[LM] Closed stream → {account_id}")
@@ -77,60 +173,10 @@ class ListenerManager:
         except Exception as e:
             print(f"[LM] Stream close error → {account_id}: {e}")
 
-    # =====================================
-    # SDK MANAGEMENT
-    # =====================================
-    async def _get_api(self):
-        if self._api is None:
-            self._api = get_metaapi_client()
-        return self._api
+    # =========================================================================
+    # DB HELPERS
+    # =========================================================================
 
-    async def _reset_sdk_safely(self, stale_instance=None):
-        """
-        Replace the MetaApi SDK with a fresh instance and properly close the
-        old one so its WebSocket threads and memory are freed.
-
-        Serialised by _sdk_reset_lock: many coroutines that all notice the
-        same stale SDK produce only ONE new instance, not N instances.
-
-        stale_instance — the api object the caller saw fail.  If self._api
-                         has already been replaced by another coroutine by
-                         the time we acquire the lock, we skip the reset.
-        """
-        async with self._sdk_reset_lock:
-            if stale_instance is not None and self._api is not stale_instance:
-                print("[LM] SDK already reset by another coroutine — skipping")
-                return
-
-            old = self._api
-            now = time.monotonic()
-            self._last_sdk_reset = now
-
-            print("[LM] Resetting MetaApi SDK...")
-            try:
-                self._api = reset_metaapi_client()
-                print("[LM] MetaApi SDK reset complete")
-            except Exception as e:
-                print(f"[LM] SDK reset failed: {e}")
-                self._api = None
-                return
-
-            # Close the old instance AFTER the new one is live.
-            # Guard against SDK versions where close() returns None instead of
-            # a coroutine — 'NoneType' object can't be awaited.
-            if old is not None:
-                try:
-                    if hasattr(old, "close"):
-                        result = old.close()
-                        if asyncio.iscoroutine(result):
-                            await asyncio.wait_for(result, timeout=10)
-                        print("[LM] Old SDK instance closed cleanly")
-                except Exception as e:
-                    print(f"[LM] Old SDK close error (non-critical): {e}")
-
-    # =====================================
-    # SET LISTENER ACTIVE FLAG IN DB
-    # =====================================
     def _set_listener_active(self, account_id_or_metaapi_id, active: bool):
         db: Session = SessionLocal()
         try:
@@ -149,18 +195,15 @@ class ListenerManager:
         finally:
             db.close()
 
-    # =====================================
+    # =========================================================================
     # GLOBAL OUTAGE DETECTION
-    # =====================================
+    # =========================================================================
+
     def _record_disconnect(self, account_id: str):
         now = time.monotonic()
         self._disconnect_times[account_id] = now
 
-        recent = [
-            t for t in self._disconnect_times.values()
-            if now - t <= GLOBAL_OUTAGE_WINDOW
-        ]
-
+        recent = [t for t in self._disconnect_times.values() if now - t <= GLOBAL_OUTAGE_WINDOW]
         total_known = max(len(get_all_connections()) + len(recent), 1)
         ratio = len(recent) / total_known
 
@@ -191,30 +234,24 @@ class ListenerManager:
         self._reconnect_attempts.clear()
         self._disconnect_times.clear()
 
-        # Reset MetaApi client — zombie state likely after long outage
-        print("[LM] Resetting MetaApi client after global outage...")
-        await self._reset_sdk_safely()
+        # With per-account MetaApi, no global SDK reset is needed.
+        # Each account gets a fresh MetaApi when it reconnects.
 
         self._global_outage = False
-        print("🌐 Global outage cooldown complete — queuing fresh reconnects for all accounts")
+        print("🌐 Global outage cooldown complete — queuing fresh reconnects")
 
         db: Session = SessionLocal()
         try:
             accounts = db.query(TradingAccount).all()
-
             for acc in accounts:
-                # DB is source of truth: only reconnect deployed accounts
                 if not acc.state or acc.state.upper() != "DEPLOYED":
                     continue
-
                 is_used = db.query(CopyRelationship).filter(
                     (CopyRelationship.master_account_id == acc.id) |
                     (CopyRelationship.slave_account_id == acc.id)
                 ).first()
-
                 if not is_used:
                     continue
-
                 if get_connection(acc.metaapi_account_id) is None:
                     try:
                         self._reconnect_queue.put_nowait(acc.metaapi_account_id)
@@ -224,9 +261,10 @@ class ListenerManager:
         finally:
             db.close()
 
-    # =====================================
+    # =========================================================================
     # KEEPALIVE
-    # =====================================
+    # =========================================================================
+
     async def _keep_connections_alive(self):
         while True:
             try:
@@ -236,9 +274,7 @@ class ListenerManager:
                 for account_id, connection in list(get_all_connections().items()):
                     try:
                         connected_at = self._connected_at.get(account_id, 0)
-                        elapsed = now - connected_at
-
-                        if elapsed < GRACE_PERIOD:
+                        if now - connected_at < GRACE_PERIOD:
                             print(f"🕐 Grace period active → {account_id}, skipping health check")
                             continue
 
@@ -247,18 +283,14 @@ class ListenerManager:
                             print(f"⏳ Sync in progress → {account_id}, skipping keepalive kill")
                             continue
 
-                        health = getattr(connection, 'health_monitor', None)
-                        status = getattr(health, 'health_status', None) if health else None
+                        health  = getattr(connection, "health_monitor", None)
+                        status  = getattr(health, "health_status", None) if health else None
 
                         if status is not None and not status.get("connected", False):
                             print(f"💀 Keepalive detected dead connection → {account_id}")
                             await self.mark_disconnected(account_id)
                             continue
 
-                        # Event-silence check: health_monitor says "connected" but
-                        # MetaAPI subscription manager may have dropped subscriptions
-                        # internally without firing on_disconnected. Detect this by
-                        # checking how long it has been since any callback fired.
                         listener = self._listeners.get(account_id)
                         if listener and listener._last_event_at > 0:
                             silence = now - listener._last_event_at
@@ -276,14 +308,14 @@ class ListenerManager:
                 print(f"❌ Keepalive loop error: {e}")
                 await asyncio.sleep(10)
 
-    # =====================================
-    # START MANAGER
-    # =====================================
+    # =========================================================================
+    # START
+    # =========================================================================
+
     async def start(self):
         if self._running:
             return
 
-        self._api = get_metaapi_client()
         self._running = True
         print("🚀 Listener Manager started")
 
@@ -298,9 +330,10 @@ class ListenerManager:
                 print(f"❌ Manager error: {e}")
                 await asyncio.sleep(3)
 
-    # =====================================
+    # =========================================================================
     # RECONNECT WORKER
-    # =====================================
+    # =========================================================================
+
     async def _reconnect_worker(self):
         while True:
             try:
@@ -316,7 +349,6 @@ class ListenerManager:
                     self._reconnect_queue.task_done()
                     continue
 
-                # ── DB CHECK: don't reconnect accounts the user has undeployed ──
                 db: Session = SessionLocal()
                 try:
                     acc = db.query(TradingAccount).filter(
@@ -331,7 +363,6 @@ class ListenerManager:
                     self._reconnect_queue.task_done()
                     continue
 
-                # DB is source of truth — if user undeployed, stop reconnecting
                 if not acc.state or acc.state.upper() != "DEPLOYED":
                     print(f"🛑 DB state={acc.state!r} for {account_id} — not reconnecting")
                     self._purge_account_state(account_id)
@@ -367,74 +398,28 @@ class ListenerManager:
                 print(f"❌ Reconnect worker error: {e}")
                 await asyncio.sleep(5)
 
-    # =====================================
+    # =========================================================================
     # NUCLEAR RESET
-    # =====================================
+    # =========================================================================
+
     async def _nuclear_reset(self, account_id: str, db_acc: TradingAccount = None):
         """
-        Last-resort recovery: tear down everything and rebuild.
+        Last-resort recovery: tear down the account completely — connection,
+        listener, and its private MetaApi instance — then rebuild fresh.
 
-        Design notes:
-        - We hold account_id in _attaching for the ENTIRE nuclear sequence so
-          the _sync() loop (runs every 5s) cannot race in with a concurrent
-          _ensure_listener() while the SDK is being reset or the account is
-          being redeployed.  The race was the root cause of listeners attaching
-          with a stale SDK, then the SDK getting replaced underneath them.
-        - We skip undeploy/redeploy when the broker reports CONNECTED — the
-          issue is MetaApi server-side sync overload, not the broker link.
-          Undeploy/redeploy wastes 20-30s and doesn't help in that case.
+        mark_attaching=True keeps the slot locked throughout so _sync() cannot
+        race in and attach a new listener while nuclear is in progress.
         """
         print(f"☢️ Nuclear reset starting → {account_id}")
 
-        async with self._lock:
-            connection = get_connection(account_id)
-            listener = self._listeners.pop(account_id, None)
-            # Mark as attaching immediately — holds the slot throughout nuclear
-            # so _sync()/_ensure_listener() cannot race in during SDK reset.
-            self._attaching.add(account_id)
-            self._connected_at.pop(account_id, None)
-
-        self._cancel_sync_task(account_id)
-
-        if listener:
-            try:
-                listener._known_positions.clear()
-                listener._position_cache.clear()
-                listener._disconnected = False
-            except Exception:
-                pass
-
-        if connection:
-            try:
-                if listener:
-                    connection.remove_synchronization_listener(listener)
-            except Exception:
-                pass
-            await self._close_stream_safely(connection, account_id)
-            try:
-                remove_connection(account_id)
-            except Exception:
-                pass
-
-        self._set_listener_active(account_id, False)
+        # Full teardown: connection + listener + MetaApi; holds _attaching slot.
+        await self._teardown_account(account_id, mark_attaching=True)
         print(f"🧹 Nuclear teardown complete → {account_id}")
 
-        # Brief pause — let any in-flight MetaApi callbacks drain before we
-        # reset the SDK.  2s is enough; the old 15s was too long and let
-        # _sync() fire 3× and try to attach a new listener mid-reset.
+        # Brief drain — let in-flight MetaApi callbacks settle before rebuild.
         await asyncio.sleep(2)
 
-        # ── 1. Reset SDK FIRST so the fresh listener uses the new instance ──
-        stale = self._api
-        await self._reset_sdk_safely(stale_instance=stale)
-
-        if self._api is None:
-            print(f"⚠️ SDK unavailable after reset → {account_id}, aborting nuclear")
-            async with self._lock:
-                self._attaching.discard(account_id)
-            return
-
-        # ── 2. DB is source of truth: only act if still deployed ──
+        # DB is source of truth: abort if no longer deployed.
         if db_acc is None:
             db: Session = SessionLocal()
             try:
@@ -445,16 +430,16 @@ class ListenerManager:
                 db.close()
 
         if not db_acc or not db_acc.state or db_acc.state.upper() != "DEPLOYED":
-            print(f"🛑 DB state={db_acc.state if db_acc else 'MISSING'!r} → skipping nuclear redeploy for {account_id}")
+            state_str = db_acc.state if db_acc else "MISSING"
+            print(f"🛑 DB state={state_str!r} → skipping nuclear redeploy for {account_id}")
             async with self._lock:
                 self._attaching.discard(account_id)
             return
 
-        # ── 3. Only undeploy/redeploy if broker is genuinely unreachable ──
-        # When broker is CONNECTED the issue is MetaApi sync server overload.
-        # Undeploy/redeploy won't help and wastes 20-30s.
+        # Use the shared admin API (REST only, no streaming) to check/redeploy.
         try:
-            account = await self._api.metatrader_account_api.get_account(account_id)
+            admin_api = get_metaapi_client()
+            account   = await admin_api.metatrader_account_api.get_account(account_id)
             broker_connected = getattr(account, "connection_status", None) == "CONNECTED"
 
             if account.state.upper() != "DEPLOYED":
@@ -468,12 +453,12 @@ class ListenerManager:
                 await account.deploy()
                 await asyncio.sleep(DEPLOY_WAIT)
             else:
-                print(f"🔄 Nuclear reattach only → {account_id} (broker already CONNECTED, skipping redeploy)")
+                print(f"🔄 Nuclear reattach only → {account_id} (broker already CONNECTED)")
 
         except Exception as e:
             print(f"⚠️ Nuclear redeploy failed → {account_id}: {e}")
 
-        # ── 4. Release the slot and queue a fresh reconnect ──
+        # Release the slot and queue a fresh connect (fresh MetaApi created in _ensure_listener)
         async with self._lock:
             self._attaching.discard(account_id)
 
@@ -483,20 +468,18 @@ class ListenerManager:
         except Exception:
             pass
 
-    # =====================================
+    # =========================================================================
     # DB SYNC + HEALTH CHECK
-    # =====================================
+    # =========================================================================
+
     async def _sync(self):
         if self._global_outage:
             return
 
         db: Session = SessionLocal()
-
         try:
             accounts = db.query(TradingAccount).all()
-
             for acc in accounts:
-                # DB is source of truth — skip/remove undeployed accounts
                 if not acc.state or acc.state.upper() != "DEPLOYED":
                     await self._remove_listener(acc)
                     continue
@@ -511,7 +494,6 @@ class ListenerManager:
                     continue
 
                 await self._ensure_listener(acc)
-
         finally:
             db.close()
 
@@ -526,15 +508,14 @@ class ListenerManager:
                 if sync_task and not sync_task.done():
                     continue
 
-                health = getattr(connection, 'health_monitor', None)
-                status = getattr(health, 'health_status', None) if health else None
+                health = getattr(connection, "health_monitor", None)
+                status = getattr(health, "health_status", None) if health else None
 
                 if status is not None and not status.get("connected", False):
                     print(f"💀 Dead connection detected → {account_id}")
                     await self.mark_disconnected(account_id)
                     continue
 
-                # Event-silence check (same logic as keepalive, catches it faster)
                 listener = self._listeners.get(account_id)
                 if listener and listener._last_event_at > 0:
                     silence = now - listener._last_event_at
@@ -548,9 +529,10 @@ class ListenerManager:
             except Exception:
                 pass
 
-    # =====================================
+    # =========================================================================
     # ENSURE LISTENER EXISTS
-    # =====================================
+    # =========================================================================
+
     async def _ensure_listener(self, acc: TradingAccount):
         account_id = acc.metaapi_account_id
 
@@ -567,41 +549,34 @@ class ListenerManager:
         try:
             print(f"🔌 Attaching listener → {account_id}")
 
-            api = await self._get_api()
+            # Fresh MetaApi for this account — destroyed on any failure or disconnect
+            api     = self._create_api_for(account_id)
             account = await api.metatrader_account_api.get_account(account_id)
 
-            # ── DB is source of truth: do NOT auto-deploy here ──
-            # If MetaApi says not deployed but DB says deployed, the deploy
-            # already happened via the route handler.  We wait for MetaApi
-            # to catch up rather than issuing a second deploy command.
             if account.state.upper() != "DEPLOYED":
                 print(
                     f"⚠️ MetaApi reports {account.state!r} for {account_id} "
                     f"but DB says deployed — waiting for MetaApi to sync, skipping attach"
                 )
+                await self._destroy_api_for(account_id)
                 return
 
             print(f"⏳ Waiting for broker connection → {account_id}")
-            timeout = 15
             connected = False
-
-            for i in range(timeout):
+            for i in range(15):
                 try:
                     await asyncio.wait_for(account.reload(), timeout=RELOAD_TIMEOUT)
                 except Exception:
                     pass
-
                 status = account.connection_status
-                print(f"   [{i+1}/{timeout}] connection_status={status}")
-
+                print(f"   [{i+1}/15] connection_status={status}")
                 if status == "CONNECTED":
                     connected = True
                     break
-
                 await asyncio.sleep(1)
 
             if not connected:
-                print(f"⚠️ Broker not CONNECTED after {timeout}s → {account_id}, attempting stream anyway")
+                print(f"⚠️ Broker not CONNECTED after 15s → {account_id}, attempting stream anyway")
 
             await asyncio.sleep(2)
 
@@ -611,9 +586,7 @@ class ListenerManager:
                 await asyncio.wait_for(connection.connect(), timeout=CONNECT_TIMEOUT)
             except asyncio.TimeoutError:
                 await self._close_stream_safely(connection, account_id)
-                raise Exception(
-                    f"[LM] connection.connect() timed out → {account_id}"
-                )
+                raise Exception(f"[LM] connection.connect() timed out → {account_id}")
 
             async with self._lock:
                 if get_connection(account_id) is not None:
@@ -621,9 +594,6 @@ class ListenerManager:
                     await self._close_stream_safely(connection, account_id)
                     return
 
-                # Pass both IDs to the listener so disconnect callbacks use
-                # the MetaApi string ID (for manager lookups) while the copy
-                # engine continues to receive the integer DB ID.
                 listener = MetaApiTradeListener(
                     db_account_id=acc.id,
                     metaapi_account_id=account_id,
@@ -631,7 +601,7 @@ class ListenerManager:
                 )
                 connection.add_synchronization_listener(listener)
                 set_connection(account_id, connection)
-                self._listeners[account_id] = listener
+                self._listeners[account_id]   = listener
                 self._connected_at[account_id] = time.monotonic()
 
             print(f"👂 Listener attached → {account_id}")
@@ -647,14 +617,17 @@ class ListenerManager:
             print(f"❌ Attach failed {acc.id}: {e}")
             if connection:
                 await self._close_stream_safely(connection, account_id)
+            # Destroy the API we just created — otherwise it leaks
+            await self._destroy_api_for(account_id)
 
         finally:
             async with self._lock:
                 self._attaching.discard(account_id)
 
-    # =====================================
+    # =========================================================================
     # BACKGROUND SYNC WAIT
-    # =====================================
+    # =========================================================================
+
     async def _background_sync_wait(self, account_id: str, connection):
         try:
             for attempt in range(1, MAX_SYNC_ATTEMPTS + 1):
@@ -667,8 +640,6 @@ class ListenerManager:
                     self._set_listener_active(account_id, True)
                     self._reconnect_attempts.pop(account_id, None)
                     self._disconnect_times.pop(account_id, None)
-                    # Seed the event-silence clock so the keepalive silence check
-                    # activates even if MetaAPI never fires a callback after sync.
                     listener = self._listeners.get(account_id)
                     if listener and listener._last_event_at == 0.0:
                         listener._last_event_at = time.monotonic()
@@ -690,128 +661,65 @@ class ListenerManager:
 
                 await asyncio.sleep(5)
 
-            # All sync attempts exhausted — treat as dead and trigger reconnect.
-            # sync_failed=True resets the reconnect counter so these timeouts
-            # (MetaAPI server-side) don't push the account toward nuclear reset.
             print(
                 f"⚠️ Sync never completed after {MAX_SYNC_ATTEMPTS} attempts → "
                 f"{account_id}, triggering reconnect"
             )
             await self.mark_disconnected(account_id, sync_failed=True)
-            return
 
         finally:
-            # Always remove the done task from the dict so it doesn't
-            # accumulate as a ghost entry consuming memory indefinitely.
             self._sync_tasks.pop(account_id, None)
 
-    # =====================================
+    # =========================================================================
     # CANCEL SYNC TASK
-    # =====================================
+    # =========================================================================
+
     def _cancel_sync_task(self, account_id: str):
         task = self._sync_tasks.pop(account_id, None)
         if task and not task.done():
             task.cancel()
 
-    # =====================================
+    # =========================================================================
     # REMOVE LISTENER
-    # =====================================
+    # =========================================================================
+
     async def _remove_listener(self, acc: TradingAccount):
         """
-        Cleanly close the streaming connection for an account.
-
-        DB is source of truth: we do NOT call account.undeploy() here.
-        If the account should be undeployed, the route handler already did
-        it before updating the DB state.  Calling undeploy again would
-        either be a no-op or cause an unexpected double-undeploy.
+        Cleanly remove a listener when an account is undeployed or no longer
+        part of any copy relationship.  Full teardown: connection + MetaApi.
         """
         account_id = acc.metaapi_account_id
-
-        async with self._lock:
-            connection = get_connection(account_id)
-            listener = self._listeners.pop(account_id, None)
-            self._attaching.discard(account_id)
-            self._connected_at.pop(account_id, None)
-
-        self._cancel_sync_task(account_id)
-        # Full per-account state cleanup
-        self._purge_account_state(account_id)
-
-        if not connection:
+        if get_connection(account_id) is None and account_id not in self._listeners:
             return
 
-        try:
-            print(f"🛑 Removing listener → {account_id}")
+        print(f"🛑 Removing listener → {account_id}")
+        await self._teardown_account(account_id, mark_attaching=False)
+        print(f"🗑️ Listener removed → {account_id}")
 
-            if listener:
-                try:
-                    connection.remove_synchronization_listener(listener)
-                except Exception:
-                    pass
-
-            await self._close_stream_safely(connection, account_id)
-            remove_connection(account_id)
-
-            if listener:
-                try:
-                    listener._known_positions.clear()
-                    listener._position_cache.clear()
-                except Exception:
-                    pass
-
-            self._set_listener_active(account_id, False)
-            print(f"🗑️ Listener removed → {account_id}")
-
-        except Exception as e:
-            print(f"❌ Remove failed {account_id}: {e}")
-
-    # =====================================
+    # =========================================================================
     # MARK DISCONNECTED
-    # =====================================
+    # =========================================================================
+
     async def mark_disconnected(self, account_id: str, sync_failed: bool = False):
         self._record_disconnect(account_id)
 
+        # Guard: if already torn down, nothing to do
         async with self._lock:
-            if account_id not in self._listeners and get_connection(account_id) is None:
-                return
+            has_listener = account_id in self._listeners
+            has_conn     = get_connection(account_id) is not None
+        if not has_listener and not has_conn:
+            return
 
-            connection = get_connection(account_id)
-            listener = self._listeners.pop(account_id, None)
-            self._attaching.discard(account_id)
-            self._connected_at.pop(account_id, None)
-
-        self._cancel_sync_task(account_id)
-
-        if connection:
-            if listener:
-                try:
-                    connection.remove_synchronization_listener(listener)
-                except Exception:
-                    pass
-            await self._close_stream_safely(connection, account_id)
-            remove_connection(account_id)
-
-        if listener:
-            try:
-                listener._known_positions.clear()
-                listener._position_cache.clear()
-            except Exception:
-                pass
-
-        self._set_listener_active(account_id, False)
+        await self._teardown_account(account_id, mark_attaching=False)
         print(f"♻️ Marked for reconnection → {account_id}")
 
         if not self._global_outage:
             if sync_failed:
-                # Sync timeouts are MetaAPI server-side (out-of-order packets,
-                # subscription manager overload) — not a dead account.  Reset
-                # the per-account reconnect counter so these failures never
-                # accumulate toward the nuclear-reset limit.
                 self._reconnect_attempts.pop(account_id, None)
             self._reconnect_queue.put_nowait(account_id)
 
 
-# =====================================
+# =========================================================================
 # SINGLETON
-# =====================================
+# =========================================================================
 listener_manager = ListenerManager()
