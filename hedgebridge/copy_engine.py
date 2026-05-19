@@ -7,6 +7,7 @@ from app.database import SessionLocal
 from app.services.logger import log
 from datetime import datetime
 import asyncio
+import time
 from sqlalchemy import func
 
 
@@ -14,6 +15,14 @@ class CopyEngine:
 
     def __init__(self):
         self._processing = set()
+        # Suppress echo-back loop on SL/TP modifies.
+        # Key: "db_account_id:ticket"  Value: monotonic timestamp when registered.
+        # When the copy engine writes a modify to an account, it pre-registers
+        # the key here.  The target account's listener checks this before
+        # firing handle_modify_trade; if found, it discards the key and skips
+        # propagation (the change came from us, not from the trader).
+        # Entries expire after 10 s in case the broker event never arrives.
+        self._suppress_modify: dict = {}
 
     # =========================
     # PIP → PRICE (BROKER ACCURATE)
@@ -890,8 +899,19 @@ class CopyEngine:
                 })
 
             # =========================
-            # STEP 3: EXECUTE ALL MODIFIES IN PARALLEL
+            # STEP 3: SUPPRESS ECHO-BACK, THEN EXECUTE
             # =========================
+            # Pre-register every account we are about to modify so their
+            # listeners skip the incoming broker echo and don't re-propagate
+            # the change (which would create a master↔slave modify loop).
+            now = time.monotonic()
+            # Expire stale suppress entries first (> 30 s old)
+            stale = [k for k, ts in self._suppress_modify.items() if now - ts > 30.0]
+            for k in stale:
+                self._suppress_modify.pop(k, None)
+            for m in task_meta:
+                self._suppress_modify[f"{m['account_id']}:{m['ticket']}"] = now
+
             results = []
 
             if execution_tasks:
@@ -899,6 +919,14 @@ class CopyEngine:
                     *execution_tasks,
                     return_exceptions=True
                 )
+
+            # Clean up suppress keys for any tasks that failed — the broker
+            # event will never arrive so we must not leave stale keys.
+            for m, result in zip(task_meta, results):
+                if isinstance(result, Exception) or (
+                    isinstance(result, dict) and not result.get("success")
+                ):
+                    self._suppress_modify.pop(f"{m['account_id']}:{m['ticket']}", None)
 
             # =========================
             # STEP 4: LOG RESULTS

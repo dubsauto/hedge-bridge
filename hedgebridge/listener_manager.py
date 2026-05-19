@@ -16,6 +16,7 @@
 #   A failure in one account cannot pollute or reset another account's SDK.
 
 import asyncio
+import gc
 import os
 import time
 from typing import Dict, Optional
@@ -87,7 +88,18 @@ class ListenerManager:
         return api
 
     async def _destroy_api_for(self, account_id: str):
-        """Fully close and discard the MetaApi instance for this account."""
+        """
+        Fully close and discard the MetaApi instance for this account.
+
+        Three-step shutdown so nothing leaks:
+          1. api.close() — signals SDK to stop WebSocket + cancel internal tasks.
+          2. await asyncio.sleep(0) — yields control so the event loop can run
+             any pending cancellation callbacks and task finally-blocks from
+             the SDK before we drop the reference.
+          3. del api + gc.collect() — the SDK has internal reference cycles
+             (tasks → event emitters → SDK objects → tasks). CPython's
+             reference counter alone cannot break cycles; gc.collect() does.
+        """
         api = self._apis.pop(account_id, None)
         if api is None:
             return
@@ -99,6 +111,12 @@ class ListenerManager:
             print(f"[LM] MetaApi closed → {account_id}")
         except Exception as e:
             print(f"[LM] MetaApi close error → {account_id}: {e}")
+        finally:
+            # Yield so the loop processes SDK task cancellations/cleanups.
+            await asyncio.sleep(0)
+            del api
+            gc.collect()
+            print(f"[LM] MetaApi GC'd → {account_id}")
 
     # =========================================================================
     # SHARED TEARDOWN HELPER
@@ -144,6 +162,13 @@ class ListenerManager:
         if connection:
             await self._close_stream_safely(connection, account_id)
             remove_connection(account_id)
+
+        # Drop local references NOW — before destroying the API — so that the
+        # connection and listener objects' reference counts are at their minimum
+        # when api.close() + gc.collect() run. Any cycles they hold are then
+        # fully reachable by the GC with no external strong references left.
+        connection = None  # noqa: F841
+        listener = None    # noqa: F841
 
         # Destroy private MetaApi — this is what was leaking
         await self._destroy_api_for(account_id)
@@ -613,12 +638,19 @@ class ListenerManager:
             async with self._lock:
                 self._sync_tasks[account_id] = task
 
-        except Exception as e:
-            print(f"❌ Attach failed {acc.id}: {e}")
+        except BaseException as e:
+            # Catch BaseException (includes CancelledError) so the API created
+            # at the top of this function is always destroyed on any failure —
+            # not just on Exception subclasses.
+            print(f"❌ Attach failed {acc.id}: {type(e).__name__}: {e}")
             if connection:
                 await self._close_stream_safely(connection, account_id)
+            connection = None  # noqa: F841
             # Destroy the API we just created — otherwise it leaks
             await self._destroy_api_for(account_id)
+            # Re-raise CancelledError so the task framework knows we were cancelled
+            if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
+                raise
 
         finally:
             async with self._lock:

@@ -264,16 +264,28 @@ class MetaApiTradeListener(ABC):
 
                 if prev:
                     if prev["sl"] != current_sl or prev["tp"] != current_tp:
-                        print(f"✏️ MODIFY {self.account_id} → {ticket}")
 
-                        tasks.append(
-                            copy_engine.handle_modify_trade(
-                                account_id=self.account_id,
-                                ticket=ticket,
-                                new_sl=current_sl,
-                                new_tp=current_tp
+                        # ── Echo-back guard ──────────────────────────────
+                        # If the copy engine just wrote this SL/TP change to
+                        # this account, the incoming event is our own echo.
+                        # Suppress it — propagating it would create an
+                        # infinite master↔slave modify loop.
+                        suppress_key = f"{self.account_id}:{ticket}"
+                        suppress_ts = copy_engine._suppress_modify.pop(suppress_key, None)
+
+                        if suppress_ts is not None and (time.monotonic() - suppress_ts) < 10.0:
+                            # Our echo — update cache silently, do not propagate
+                            print(f"🔕 MODIFY suppressed (echo-back) {self.account_id} → {ticket}")
+                        else:
+                            print(f"✏️ MODIFY {self.account_id} → {ticket}")
+                            tasks.append(
+                                copy_engine.handle_modify_trade(
+                                    account_id=self.account_id,
+                                    ticket=ticket,
+                                    new_sl=current_sl,
+                                    new_tp=current_tp
+                                )
                             )
-                        )
 
                 # update cache
                 self._position_cache[ticket] = {
