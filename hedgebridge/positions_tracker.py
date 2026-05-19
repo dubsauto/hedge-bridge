@@ -312,14 +312,21 @@ class PositionsTracker:
                     meta.append(("slave", slave_db_id, slave_ticket))
 
             if not tasks:
-                print(f"[Tracker] Close sync — nothing to close for {master_acc.id}:{master_ticket}")
-                return
+                # All positions are already closed at the broker — nothing to
+                # send to MetaAPI.  But the CopyTradeLink rows still show
+                # status="open" (the listener missed the close event), which
+                # is exactly what causes the infinite re-detection loop.
+                # Fall through to the DB update so we mark them closed now.
+                print(f"[Tracker] Close sync — positions already closed, marking DB for {master_acc.id}:{master_ticket}")
+            else:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for (role, acc_id, ticket), result in zip(meta, results):
+                    ok = result is True
+                    print(f"[Tracker] Close-sync {role} acc={acc_id} ticket={ticket}: {'OK' if ok else f'FAILED ({result})'}")
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for (role, acc_id, ticket), result in zip(meta, results):
-                ok = result is True
-                print(f"[Tracker] Close-sync {role} acc={acc_id} ticket={ticket}: {'OK' if ok else f'FAILED ({result})'}")
-
+            # Always update DB — whether we sent closes or not.
+            # If positions were already gone from the broker, the DB is simply
+            # stale and must be reconciled here to stop future re-detection.
             write_db = SessionLocal()
             try:
                 now = datetime.utcnow()
@@ -513,6 +520,36 @@ class PositionsTracker:
             if not master_closed and not any_slave_closed:
                 # Everything still open — clear any stale detection
                 self._close_detected.pop(detection_key, None)
+                continue
+
+            # Check if ALL sides with known positions are already closed.
+            # If so, skip the 10-second watch window — nothing to propagate,
+            # just reconcile the DB immediately to stop the re-detection loop.
+            all_closed = master_closed
+            if all_closed:
+                for (_, _, _, slave_db_id, slave_ticket) in lts:
+                    if not slave_ticket:
+                        continue
+                    slave_live = live_tickets.get(slave_db_id)
+                    if slave_live is None:
+                        all_closed = False  # unknown — be cautious
+                        break
+                    if slave_ticket in slave_live:
+                        all_closed = False  # still open on this slave
+                        break
+
+            if all_closed:
+                # Every position in this group is confirmed closed at the broker.
+                # The DB is simply stale — reconcile it now without waiting.
+                self._close_detected.pop(detection_key, None)
+                master_acc = master_meta_map.get(master_db_id)
+                if master_acc:
+                    print(f"[Tracker] All sides closed — reconciling DB immediately for {master_db_id}:{master_ticket}")
+                    asyncio.create_task(
+                        self._emergency_close_sync(
+                            user_id, master_acc, master_ticket, lts, live_tickets, slave_meta_map
+                        )
+                    )
                 continue
 
             # At least one side closed — start or continue tracking
